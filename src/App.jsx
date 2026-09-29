@@ -72,10 +72,11 @@ export default function App() {
       .eq('user_id', userId)
       .maybeSingle()
 
+    // FIXED: Changed 'name' to 'business_name' to match your database schema
     if (error || !data) {
       const { data: newTenant, error: createError } = await supabase
         .from('tenants')
-        .insert([{ name: userEmail === OWNER_EMAIL ? 'Harmin Solutions HQ' : 'Merchant Branch', user_id: userId }])
+        .insert([{ business_name: userEmail === OWNER_EMAIL ? 'Harmin Solutions HQ' : 'Merchant Branch', user_id: userId }])
         .select()
         .single()
       
@@ -364,7 +365,7 @@ export default function App() {
                 {allTenants.map(t => (
                   <div key={t.id} className="flex justify-between items-center bg-slate-950/60 p-4 rounded-xl border border-slate-800/80">
                     <div>
-                      <p className="font-bold text-white">{t.name}</p>
+                      <p className="font-bold text-white">{t.business_name || 'Unnamed Store'}</p>
                       <p className="text-xs text-slate-500 font-mono mt-0.5">ID: {t.id}</p>
                     </div>
                     <span className="text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2.5 py-1 rounded-full font-semibold">Active</span>
@@ -404,7 +405,7 @@ export default function App() {
         <div className="flex justify-between items-center mb-8">
           <div>
             <h1 className="text-3xl font-black">Kitchen Display</h1>
-            <p className="text-xs text-slate-400">Store: {tenant.name}</p>
+            <p className="text-xs text-slate-400">Store: {tenant.business_name}</p>
           </div>
           <div className="flex gap-4">
             <button onClick={() => fetchKitchenOrders(tenant.id)} className="bg-slate-700 px-6 py-3 rounded-xl font-bold hover:bg-slate-600 transition">Refresh</button>
@@ -451,7 +452,7 @@ export default function App() {
           <div className="flex justify-between items-center mb-8">
             <div>
               <h1 className="text-3xl font-black text-slate-900">Manager Back-Office</h1>
-              <p className="text-xs text-slate-500">Managing Inventory for: {tenant.name}</p>
+              <p className="text-xs text-slate-500">Managing Inventory for: {tenant.business_name}</p>
             </div>
             <button onClick={() => setView('pos')} className="bg-slate-200 px-4 py-2 rounded-lg font-bold hover:bg-slate-300">
               Return to POS
@@ -519,7 +520,7 @@ export default function App() {
         <div className="bg-white w-full max-w-sm p-8 shadow-2xl rounded-sm flex flex-col font-mono text-sm text-slate-800 relative">
           <div className="text-center mb-6 border-b border-dashed border-slate-300 pb-6">
             <h2 className="text-2xl font-black mb-1">HarminPOS</h2>
-            <p className="text-xs text-slate-500">{tenant.name}</p>
+            <p className="text-xs text-slate-500">{tenant.business_name}</p>
             <p className="text-xs text-slate-500 mt-2">Date: {receiptData.date}</p>
             <p className="text-xs text-slate-500">Receipt #: {receiptData.receiptNo}</p>
           </div>
@@ -558,7 +559,7 @@ export default function App() {
         <div className="flex justify-between items-center mb-6">
           <div>
             <h1 className="text-2xl font-black tracking-tight text-slate-900">HarminPOS</h1>
-            <p className="text-xs text-slate-500 font-medium">Store: {tenant.name} · <button onClick={handleLogout} className="text-blue-600 hover:underline">Sign Out</button></p>
+            <p className="text-xs text-slate-500 font-medium">Store: {tenant.business_name} · <button onClick={handleLogout} className="text-blue-600 hover:underline">Sign Out</button></p>
           </div>
           <div className="flex gap-2">
             {isOwner && (
