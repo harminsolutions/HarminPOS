@@ -2,7 +2,17 @@ import { useState, useEffect } from 'react'
 import { supabase } from './supabase'
 
 export default function App() {
-  const [view, setView] = useState('pos') // 'pos', 'receipt', 'admin', 'kds'
+  const [session, setSession] = useState(null)
+  const [tenant, setTenant] = useState(null)
+  const [loadingTenant, setLoadingTenant] = useState(false)
+  
+  // Auth Form State
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [isSignUp, setIsSignUp] = useState(false)
+
+  // App Views: 'pos', 'receipt', 'admin', 'kds'
+  const [view, setView] = useState('pos')
   const [cart, setCart] = useState([])
   const [products, setProducts] = useState([])
   const [showLhdn, setShowLhdn] = useState(false)
@@ -14,23 +24,52 @@ export default function App() {
   const [newProduct, setNewProduct] = useState({ name: '', price: '', category: 'Beverages' })
   const [kitchenOrders, setKitchenOrders] = useState([])
 
-  const tenantId = '11111111-1111-1111-1111-111111111111' 
-
+  // 1. Check Auth Session on Load
   useEffect(() => {
-    fetchProducts()
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session)
+      if (session) fetchTenantData(session.user.id)
+    })
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session)
+      if (session) {
+        fetchTenantData(session.user.id)
+      } else {
+        setTenant(null)
+        setProducts([])
+      }
+    })
+
+    return () => subscription.unsubscribe()
   }, [])
 
-  // Fetch kitchen orders automatically when the KDS view is open
-  useEffect(() => {
-    let interval;
-    if (view === 'kds') {
-      fetchKitchenOrders()
-      interval = setInterval(fetchKitchenOrders, 5000) // Auto-refresh every 5 seconds
-    }
-    return () => clearInterval(interval)
-  }, [view])
+  // 2. Fetch Tenant tied to the logged-in user
+  const fetchTenantData = async (userId) => {
+    setLoadingTenant(true)
+    let { data, error } = await supabase
+      .from('tenants')
+      .select('*')
+      .eq('user_id', userId)
+      .single()
 
-  const fetchProducts = async () => {
+    // If no tenant exists for this user yet, create a default one automatically
+    if (error || !data) {
+      const { data: newTenant, error: createError } = await supabase
+        .from('tenants')
+        .insert([{ name: 'My New Branch', user_id: userId }])
+        .select()
+        .single()
+      
+      if (!createError) data = newTenant
+    }
+
+    setTenant(data)
+    setLoadingTenant(false)
+    if (data) fetchProducts(data.id)
+  }
+
+  const fetchProducts = async (tenantId) => {
     const { data, error } = await supabase
       .from('products')
       .select('*')
@@ -38,10 +77,20 @@ export default function App() {
       .order('created_at', { ascending: false })
     
     if (error) console.error("Error fetching products:", error)
-    else setProducts(data)
+    else setProducts(data || [])
   }
 
-  const fetchKitchenOrders = async () => {
+  // Kitchen orders polling when KDS is active
+  useEffect(() => {
+    let interval;
+    if (view === 'kds' && tenant) {
+      fetchKitchenOrders(tenant.id)
+      interval = setInterval(() => fetchKitchenOrders(tenant.id), 5000)
+    }
+    return () => clearInterval(interval)
+  }, [view, tenant])
+
+  const fetchKitchenOrders = async (tenantId) => {
     const { data, error } = await supabase
       .from('kitchen_orders')
       .select('*')
@@ -50,7 +99,27 @@ export default function App() {
       .order('created_at', { ascending: true })
       
     if (error) console.error("Error fetching KDS:", error)
-    else setKitchenOrders(data)
+    else setKitchenOrders(data || [])
+  }
+
+  const handleAuth = async (e) => {
+    e.preventDefault()
+    setIsProcessing(true)
+    if (isSignUp) {
+      const { error } = await supabase.auth.signUp({ email, password })
+      if (error) alert(error.message)
+      else alert("Check your email for the confirmation link, or log in if confirmation is disabled.")
+    } else {
+      const { error } = await supabase.auth.signInWithPassword({ email, password })
+      if (error) alert(error.message)
+    }
+    setIsProcessing(false)
+  }
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut()
+    setSession(null)
+    setTenant(null)
   }
 
   const addToCart = (product) => {
@@ -77,13 +146,13 @@ export default function App() {
   const total = subtotal + sst
 
   const handleCheckout = async () => {
+    if (!tenant) return
     setIsProcessing(true)
     
-    // 1. Save the financial sale
     const { data: salesData, error: salesError } = await supabase
       .from('sales')
       .insert([{
-        tenant_id: tenantId,
+        tenant_id: tenant.id,
         subtotal: subtotal,
         sst_amount: sst,
         total_amount: total,
@@ -99,18 +168,16 @@ export default function App() {
 
     const receiptNo = salesData[0].id.split('-')[0].toUpperCase()
 
-    // 2. Send the ticket to the Kitchen Display
     await supabase
       .from('kitchen_orders')
       .insert([{
-        tenant_id: tenantId,
+        tenant_id: tenant.id,
         receipt_no: receiptNo,
         items: cart,
         status: 'pending'
       }])
 
     setIsProcessing(false)
-
     setReceiptData({
       items: [...cart],
       subtotal,
@@ -128,9 +195,10 @@ export default function App() {
 
   const handleAddProduct = async (e) => {
     e.preventDefault()
+    if (!tenant) return
     setIsProcessing(true)
     const { error } = await supabase.from('products').insert([{
-      tenant_id: tenantId,
+      tenant_id: tenant.id,
       name: newProduct.name,
       price: parseFloat(newProduct.price),
       category: newProduct.category
@@ -140,24 +208,56 @@ export default function App() {
     if (error) alert("Error adding product: " + error.message)
     else {
       setNewProduct({ name: '', price: '', category: 'Beverages' })
-      fetchProducts()
+      fetchProducts(tenant.id)
     }
   }
 
   const handleDeleteProduct = async (id) => {
-    if (window.confirm("Are you sure you want to delete this item?")) {
+    if (window.confirm("Delete this item?")) {
       await supabase.from('products').delete().eq('id', id)
-      fetchProducts()
+      fetchProducts(tenant.id)
     }
   }
 
   const handleCompleteOrder = async (orderId) => {
-    await supabase
-      .from('kitchen_orders')
-      .update({ status: 'completed' })
-      .eq('id', orderId)
-    
-    fetchKitchenOrders()
+    await supabase.from('kitchen_orders').update({ status: 'completed' }).eq('id', orderId)
+    fetchKitchenOrders(tenant.id)
+  }
+
+  // --- VIEW: LOGIN / AUTH SCREEN ---
+  if (!session) {
+    return (
+      <div className="flex h-screen bg-slate-900 items-center justify-center p-6 font-sans">
+        <div className="bg-white w-full max-w-md p-8 rounded-2xl shadow-2xl">
+          <div className="text-center mb-8">
+            <h1 className="text-3xl font-black text-slate-900">HarminPOS</h1>
+            <p className="text-sm text-slate-500 mt-1">Multi-Tenant Cloud POS SaaS</p>
+          </div>
+          <form onSubmit={handleAuth} className="space-y-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Email Address</label>
+              <input required type="email" value={email} onChange={e => setEmail(e.target.value)} className="w-full p-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-slate-900 outline-none" placeholder="owner@store.com" />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Password</label>
+              <input required type="password" value={password} onChange={e => setPassword(e.target.value)} className="w-full p-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-slate-900 outline-none" placeholder="••••••••" />
+            </div>
+            <button disabled={isProcessing} type="submit" className="w-full bg-slate-900 text-white font-bold py-3.5 rounded-xl hover:bg-slate-800 transition">
+              {isProcessing ? 'Please wait...' : (isSignUp ? 'Create Account' : 'Sign In')}
+            </button>
+          </form>
+          <div className="text-center mt-6">
+            <button onClick={() => setIsSignUp(!isSignUp)} className="text-sm text-blue-600 font-semibold hover:underline">
+              {isSignUp ? 'Already have an account? Sign In' : "Don't have an account? Create one"}
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (loadingTenant || !tenant) {
+    return <div className="flex h-screen bg-slate-900 text-white items-center justify-center font-sans">Loading tenant profile...</div>
   }
 
   // --- VIEW: KITCHEN DISPLAY (KDS) ---
@@ -165,13 +265,15 @@ export default function App() {
     return (
       <div className="min-h-screen bg-slate-900 p-6 font-sans text-white">
         <div className="flex justify-between items-center mb-8">
-          <h1 className="text-3xl font-black">Kitchen Display</h1>
+          <div>
+            <h1 className="text-3xl font-black">Kitchen Display</h1>
+            <p className="text-xs text-slate-400">Store: {tenant.name}</p>
+          </div>
           <div className="flex gap-4">
-            <button onClick={fetchKitchenOrders} className="bg-slate-700 px-6 py-3 rounded-xl font-bold hover:bg-slate-600 transition">Refresh</button>
+            <button onClick={() => fetchKitchenOrders(tenant.id)} className="bg-slate-700 px-6 py-3 rounded-xl font-bold hover:bg-slate-600 transition">Refresh</button>
             <button onClick={() => setView('pos')} className="bg-red-500 px-6 py-3 rounded-xl font-bold hover:bg-red-600 transition">Exit KDS</button>
           </div>
         </div>
-
         <div className="flex gap-6 overflow-x-auto pb-4">
           {kitchenOrders.length === 0 ? (
             <div className="text-slate-500 text-xl w-full text-center mt-20">No pending orders. Kitchen is clear!</div>
@@ -204,13 +306,16 @@ export default function App() {
     )
   }
 
-  // --- VIEW: ADMIN DASHBOARD ---
+  // --- VIEW: ADMIN BACK-OFFICE ---
   if (view === 'admin') {
     return (
       <div className="min-h-screen bg-slate-50 p-8 font-sans text-slate-800">
         <div className="max-w-4xl mx-auto">
           <div className="flex justify-between items-center mb-8">
-            <h1 className="text-3xl font-black text-slate-900">Manager Back-Office</h1>
+            <div>
+              <h1 className="text-3xl font-black text-slate-900">Manager Back-Office</h1>
+              <p className="text-xs text-slate-500">Managing Inventory for: {tenant.name}</p>
+            </div>
             <button onClick={() => setView('pos')} className="bg-slate-200 px-4 py-2 rounded-lg font-bold hover:bg-slate-300">
               Return to POS
             </button>
@@ -270,14 +375,14 @@ export default function App() {
     )
   }
 
-  // --- VIEW: RECEIPT ---
+  // --- VIEW: RECEIPT SCREEN ---
   if (view === 'receipt' && receiptData) {
     return (
       <div className="flex h-screen bg-slate-800 items-center justify-center p-6">
         <div className="bg-white w-full max-w-sm p-8 shadow-2xl rounded-sm flex flex-col font-mono text-sm text-slate-800 relative">
           <div className="text-center mb-6 border-b border-dashed border-slate-300 pb-6">
             <h2 className="text-2xl font-black mb-1">HarminPOS</h2>
-            <p className="text-xs text-slate-500">Bayan Lepas Branch</p>
+            <p className="text-xs text-slate-500">{tenant.name}</p>
             <p className="text-xs text-slate-500 mt-2">Date: {receiptData.date}</p>
             <p className="text-xs text-slate-500">Receipt #: {receiptData.receiptNo}</p>
           </div>
@@ -309,24 +414,23 @@ export default function App() {
     )
   }
 
-  // --- VIEW: NORMAL POS ---
+  // --- VIEW: MAIN POS REGISTER ---
   return (
     <div className="flex h-screen bg-slate-100 font-sans text-slate-800 antialiased">
       <div className="w-[70%] p-6 flex flex-col border-r border-slate-200">
         <div className="flex justify-between items-center mb-6">
           <div>
             <h1 className="text-2xl font-black tracking-tight text-slate-900">HarminPOS</h1>
-            <p className="text-xs text-slate-500 font-medium">Terminal #01 · Bayan Lepas Branch</p>
+            <p className="text-xs text-slate-500 font-medium">Store: {tenant.name} · <button onClick={handleLogout} className="text-blue-600 hover:underline">Sign Out</button></p>
           </div>
-          <div className="flex gap-3 w-[60%]">
-            <input type="text" placeholder="Search..." className="flex-1 px-4 py-2.5 bg-white rounded-xl border border-slate-200 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-900" />
-            <button onClick={() => setView('kds')} className="bg-yellow-400 text-yellow-900 px-4 py-2.5 rounded-xl font-bold text-sm shadow-sm hover:bg-yellow-500 whitespace-nowrap">Kitchen Display</button>
-            <button onClick={() => setView('admin')} className="bg-slate-200 px-4 py-2.5 rounded-xl font-bold text-sm hover:bg-slate-300 whitespace-nowrap">Manager Mode</button>
+          <div className="flex gap-2">
+            <button onClick={() => setView('kds')} className="bg-yellow-400 text-yellow-900 px-4 py-2.5 rounded-xl font-bold text-sm shadow-sm hover:bg-yellow-500">Kitchen Display</button>
+            <button onClick={() => setView('admin')} className="bg-slate-200 px-4 py-2.5 rounded-xl font-bold text-sm hover:bg-slate-300">Manager Mode</button>
           </div>
         </div>
 
         <div className="grid grid-cols-3 gap-4 overflow-y-auto pr-1">
-          {products.length === 0 ? <div className="col-span-3 text-slate-500 text-sm py-10">Loading menu...</div> : 
+          {products.length === 0 ? <div className="col-span-3 text-slate-500 text-sm py-10">No products found. Go to Manager Mode to add inventory!</div> : 
             products.map(product => (
               <button key={product.id} onClick={() => addToCart(product)} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm text-left hover:border-slate-400 hover:shadow transition active:scale-95 flex flex-col justify-between h-32">
                 <span className="font-semibold text-slate-900">{product.name}</span>
