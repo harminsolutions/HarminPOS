@@ -2,164 +2,131 @@ import { useState, useEffect } from 'react'
 import { supabase } from './supabase'
 
 export default function App() {
+  // Global State
   const [session, setSession] = useState(null)
   const [tenant, setTenant] = useState(null)
-  const [loadingTenant, setLoadingTenant] = useState(false)
-  const [isOwner, setIsOwner] = useState(false)
+  const [loading, setLoading] = useState(true)
   
-  // Auth Form State
+  // Auth State
+  const [loginGateway, setLoginGateway] = useState('management') // 'management' or 'terminal'
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [isSignUp, setIsSignUp] = useState(false)
+  const [storeCode, setStoreCode] = useState('')
+  const [terminalPin, setTerminalPin] = useState('')
+  const [isProcessing, setIsProcessing] = useState(false)
+  
+  // Routing State ('owner', 'merchant_dashboard', 'pos_terminal')
+  const [activeRole, setActiveRole] = useState(null)
+  const [activeTab, setActiveTab] = useState('overview')
 
-  // App Views: 'pos', 'receipt', 'admin', 'kds'
-  const [view, setView] = useState('pos')
-  const [cart, setCart] = useState([])
+  // Data State
   const [products, setProducts] = useState([])
+  const [cart, setCart] = useState([])
+  const [newProduct, setNewProduct] = useState({ name: '', price: '', cost_price: '', image_url: '', category: 'Beverages' })
+  const [receiptData, setReceiptData] = useState(null)
+  const [salesData, setSalesData] = useState([])
   const [showLhdn, setShowLhdn] = useState(false)
   const [tin, setTin] = useState('')
-  const [isProcessing, setIsProcessing] = useState(false)
-  const [receiptData, setReceiptData] = useState(null)
-  
-  // Admin & KDS State
-  const [newProduct, setNewProduct] = useState({ name: '', price: '', category: 'Beverages' })
-  const [kitchenOrders, setKitchenOrders] = useState([])
-  
-  // Owner Platform State
-  const [allTenants, setAllTenants] = useState([])
-  const [platformSales, setPlatformSales] = useState([])
 
   const OWNER_EMAIL = 'harminsolutions96@gmail.com'
+  const isReportDay = new Date().getDate() === 30 // Strict 30th of the month rule
 
-  // 1. Initialize Auth and Routing
+  // --- INITIALIZATION ---
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
-      if (session) {
-        checkIfOwner(session.user.email)
-        fetchTenantData(session.user.id, session.user.email)
-      }
+      if (session) initializeApp(session.user)
+      else setLoading(false)
     })
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session)
-      if (session) {
-        checkIfOwner(session.user.email)
-        fetchTenantData(session.user.id, session.user.email)
-      } else {
+      if (session) initializeApp(session.user)
+      else if (activeRole !== 'pos_terminal') { // Don't wipe if logged into terminal via PIN
         setTenant(null)
-        setProducts([])
-        setIsOwner(false)
+        setActiveRole(null)
+        setLoading(false)
       }
     })
-
     return () => subscription.unsubscribe()
   }, [])
 
-  const checkIfOwner = (userEmail) => {
-    setIsOwner(userEmail === OWNER_EMAIL)
-  }
-
-  // 2. Fetch or Create Store Profile
-  const fetchTenantData = async (userId, userEmail) => {
-    setLoadingTenant(true)
-    
-    if (userEmail === OWNER_EMAIL) {
-      fetchPlatformOverview()
+  const initializeApp = async (user) => {
+    setLoading(true)
+    if (user.email === OWNER_EMAIL) {
+      setActiveRole('owner')
+      setLoading(false)
+      return
     }
 
-    let { data, error } = await supabase
+    let { data } = await supabase.from('tenants').select('*').eq('user_id', user.id).maybeSingle()
+    if (!data) {
+      const { data: newTenant } = await supabase
+        .from('tenants')
+        .insert([{ business_name: 'My Store', user_id: user.id }])
+        .select().single()
+      data = newTenant
+    }
+    
+    setTenant(data)
+    fetchProducts(data.id)
+    fetchSales(data.id)
+    setActiveRole('merchant_dashboard')
+    setLoading(false)
+  }
+
+  const fetchProducts = async (tenantId) => {
+    const { data } = await supabase.from('products').select('*').eq('tenant_id', tenantId).order('created_at', { ascending: false })
+    setProducts(data || [])
+  }
+
+  const fetchSales = async (tenantId) => {
+    const { data } = await supabase.from('sales').select('*').eq('tenant_id', tenantId).order('created_at', { ascending: false })
+    setSalesData(data || [])
+  }
+
+  // --- AUTH ACTIONS ---
+  const handleManagementLogin = async (e) => {
+    e.preventDefault()
+    setIsProcessing(true)
+    const { error } = await supabase.auth.signInWithPassword({ email, password })
+    if (error) alert(error.message)
+    setIsProcessing(false)
+  }
+
+  const handleTerminalLogin = async (e) => {
+    e.preventDefault()
+    setIsProcessing(true)
+    const { data, error } = await supabase
       .from('tenants')
       .select('*')
-      .eq('user_id', userId)
+      .eq('store_code', storeCode.toUpperCase())
+      .eq('terminal_pin', terminalPin)
       .maybeSingle()
 
     if (error || !data) {
-      const { data: newTenant, error: createError } = await supabase
-        .from('tenants')
-        .insert([{ business_name: userEmail === OWNER_EMAIL ? 'Harmin Solutions HQ' : 'Merchant Branch', user_id: userId }])
-        .select()
-        .single()
-      
-      if (!createError) data = newTenant
-    }
-
-    setTenant(data)
-    setLoadingTenant(false)
-    if (data && userEmail !== OWNER_EMAIL) fetchProducts(data.id)
-  }
-
-  // 3. Owner Analytics
-  const fetchPlatformOverview = async () => {
-    const { data: tenantsData } = await supabase.from('tenants').select('*')
-    const { data: salesData } = await supabase.from('sales').select('*')
-    setAllTenants(tenantsData || [])
-    setPlatformSales(salesData || [])
-  }
-
-  // 4. Client Inventory
-  const fetchProducts = async (tenantId) => {
-    const { data, error } = await supabase
-      .from('products')
-      .select('*')
-      .eq('tenant_id', tenantId)
-      .order('created_at', { ascending: false })
-    
-    if (error) console.error("Error fetching products:", error)
-    else setProducts(data || [])
-  }
-
-  // 5. KDS Polling
-  useEffect(() => {
-    let interval;
-    if (view === 'kds' && tenant && !isOwner) {
-      fetchKitchenOrders(tenant.id)
-      interval = setInterval(() => fetchKitchenOrders(tenant.id), 5000)
-    }
-    return () => clearInterval(interval)
-  }, [view, tenant, isOwner])
-
-  const fetchKitchenOrders = async (tenantId) => {
-    const { data } = await supabase
-      .from('kitchen_orders')
-      .select('*')
-      .eq('tenant_id', tenantId)
-      .eq('status', 'pending')
-      .order('created_at', { ascending: true })
-      
-    setKitchenOrders(data || [])
-  }
-
-  // 6. User Actions
-  const handleAuth = async (e) => {
-    e.preventDefault()
-    setIsProcessing(true)
-    if (isSignUp) {
-      const { error } = await supabase.auth.signUp({ email, password })
-      if (error) alert(error.message)
-      else alert("Check your email for confirmation or sign in.")
+      alert("Invalid Store Code or Terminal PIN.")
     } else {
-      const { error } = await supabase.auth.signInWithPassword({ email, password })
-      if (error) alert(error.message)
+      setTenant(data)
+      fetchProducts(data.id)
+      setActiveRole('pos_terminal')
     }
     setIsProcessing(false)
   }
 
   const handleLogout = async () => {
     await supabase.auth.signOut()
-    setSession(null)
     setTenant(null)
-    setIsOwner(false)
-    setView('pos')
+    setActiveRole(null)
+    setStoreCode('')
+    setTerminalPin('')
   }
 
+  // --- POS TERMINAL ACTIONS ---
   const addToCart = (product) => {
     const existing = cart.find(item => item.id === product.id)
-    if (existing) {
-      setCart(cart.map(item => item.id === product.id ? { ...item, qty: item.qty + 1 } : item))
-    } else {
-      setCart([...cart, { ...product, qty: 1 }])
-    }
+    if (existing) setCart(cart.map(item => item.id === product.id ? { ...item, qty: item.qty + 1 } : item))
+    else setCart([...cart, { ...product, qty: 1 }])
   }
 
   const updateQty = (id, delta) => {
@@ -172,465 +139,326 @@ export default function App() {
     }).filter(Boolean))
   }
 
-  const subtotal = cart.reduce((sum, item) => sum + (item.price * item.qty), 0)
-  const sst = subtotal * 0.06
-  const total = subtotal + sst
-
   const handleCheckout = async () => {
-    if (!tenant) return
     setIsProcessing(true)
-    
-    const { data: salesData, error: salesError } = await supabase
+    const subtotal = cart.reduce((sum, item) => sum + (item.price * item.qty), 0)
+    const totalProfit = cart.reduce((sum, item) => sum + ((item.price - (item.cost_price || 0)) * item.qty), 0)
+    const sst = subtotal * 0.06
+    const total = subtotal + sst
+
+    const { data: salesOutput, error } = await supabase
       .from('sales')
-      .insert([{
-        tenant_id: tenant.id,
-        subtotal: subtotal,
-        sst_amount: sst,
-        total_amount: total,
-        lhdn_buyer_tin: showLhdn ? tin : null
-      }])
+      .insert([{ tenant_id: tenant.id, subtotal, sst_amount: sst, total_amount: total, total_profit: totalProfit, lhdn_buyer_tin: showLhdn ? tin : null }])
       .select()
 
-    if (salesError) {
-      setIsProcessing(false)
-      alert("Checkout failed: " + salesError.message)
-      return
+    if (!error) {
+      setReceiptData({ items: [...cart], subtotal, sst, total, tin: showLhdn ? tin : null, date: new Date().toLocaleString(), receiptNo: salesOutput[0].id.split('-')[0].toUpperCase() })
+      setCart([])
+      setTin('')
+      setShowLhdn(false)
+    } else {
+      alert("Transaction failed: " + error.message)
     }
-
-    const receiptNo = salesData[0].id.split('-')[0].toUpperCase()
-
-    await supabase
-      .from('kitchen_orders')
-      .insert([{
-        tenant_id: tenant.id,
-        receipt_no: receiptNo,
-        items: cart,
-        status: 'pending'
-      }])
-
     setIsProcessing(false)
-    setReceiptData({
-      items: [...cart],
-      subtotal,
-      sst,
-      total,
-      tin: showLhdn ? tin : null,
-      date: new Date().toLocaleString(),
-      receiptNo: receiptNo
-    })
-    setCart([])
-    setTin('')
-    setShowLhdn(false)
-    setView('receipt')
   }
 
+  // --- MERCHANT DASHBOARD ACTIONS ---
   const handleAddProduct = async (e) => {
     e.preventDefault()
-    if (!tenant) return
-    setIsProcessing(true)
-    const { error } = await supabase.from('products').insert([{
-      tenant_id: tenant.id,
-      name: newProduct.name,
-      price: parseFloat(newProduct.price),
-      category: newProduct.category
+    await supabase.from('products').insert([{ 
+      tenant_id: tenant.id, 
+      name: newProduct.name, 
+      price: parseFloat(newProduct.price), 
+      cost_price: parseFloat(newProduct.cost_price || 0),
+      image_url: newProduct.image_url,
+      category: newProduct.category 
     }])
-    setIsProcessing(false)
-    
-    if (error) alert("Error adding product: " + error.message)
-    else {
-      setNewProduct({ name: '', price: '', category: 'Beverages' })
-      fetchProducts(tenant.id)
-    }
+    setNewProduct({ name: '', price: '', cost_price: '', image_url: '', category: 'Beverages' })
+    fetchProducts(tenant.id)
   }
 
-  const handleDeleteProduct = async (id) => {
-    if (window.confirm("Delete this item?")) {
-      await supabase.from('products').delete().eq('id', id)
-      fetchProducts(tenant.id)
-    }
+  const downloadCSV = () => {
+    const headers = "Transaction ID,Date,Subtotal (RM),SST (RM),Total (RM),Net Profit (RM),B2B TIN\n"
+    const rows = salesData.map(s => `${s.id.split('-')[0]},${new Date(s.created_at).toLocaleDateString()},${s.subtotal},${s.sst_amount},${s.total_amount},${s.total_profit},${s.lhdn_buyer_tin || 'N/A'}`).join("\n")
+    const blob = new Blob([headers + rows], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `Monthly_Report_${tenant.business_name.replace(/\s+/g, '_')}.csv`
+    a.click()
   }
 
-  const handleCompleteOrder = async (orderId) => {
-    await supabase.from('kitchen_orders').update({ status: 'completed' }).eq('id', orderId)
-    fetchKitchenOrders(tenant.id)
+  const downloadPDF = () => {
+    const printWindow = window.open('', '', 'height=800,width=1000')
+    const html = `
+      <html><head><title>Monthly Sales Report</title>
+      <style>body{font-family:sans-serif; padding:40px;} table{width:100%; border-collapse:collapse; margin-top:20px;} th,td{border:1px solid #ddd; padding:10px; text-align:left;} th{background:#f1f5f9;}</style>
+      </head><body>
+      <h2>${tenant.business_name} - Monthly Financial Report</h2>
+      <p>Generated strictly on: ${new Date().toLocaleDateString()}</p>
+      <table>
+        <thead><tr><th>Receipt</th><th>Date</th><th>Total Revenue</th><th>Net Profit</th></tr></thead>
+        <tbody>${salesData.map(s => `<tr><td>${s.id.split('-')[0].toUpperCase()}</td><td>${new Date(s.created_at).toLocaleDateString()}</td><td>RM ${s.total_amount.toFixed(2)}</td><td>RM${s.total_profit.toFixed(2)}</td></tr>`).join('')}</tbody>
+      </table>
+      </body></html>
+    `
+    printWindow.document.write(html)
+    printWindow.document.close()
+    printWindow.print()
   }
 
   // ==========================================
-  // RENDER VIEWS
+  // RENDER: 1. DUAL-GATEWAY LOGIN
   // ==========================================
+  if (loading) return <div className="h-screen bg-slate-900 flex items-center justify-center text-white font-mono">Initializing System...</div>
 
-  // --- LUXURY LOGIN SCREEN ---
-  if (!session) {
+  if (!activeRole) {
     return (
-      <div className="flex h-screen bg-slate-950 font-sans text-slate-100 items-center justify-center p-6 relative overflow-hidden">
-        <div className="absolute -top-40 -left-40 w-96 h-96 bg-blue-900/20 rounded-full blur-3xl pointer-events-none"></div>
-        <div className="absolute -bottom-40 -right-40 w-96 h-96 bg-indigo-900/20 rounded-full blur-3xl pointer-events-none"></div>
-
-        <div className="w-full max-w-md bg-slate-900/80 backdrop-blur-xl border border-slate-800 p-10 rounded-3xl shadow-2xl relative z-10">
-          <div className="text-center mb-8">
-            <div className="inline-block px-3 py-1 bg-slate-800 border border-slate-700 rounded-full text-xs font-semibold tracking-widest text-slate-400 uppercase mb-3">
-              Enterprise POS
-            </div>
-            <h1 className="text-3xl font-black tracking-tight text-white">HarminPOS</h1>
-            <p className="text-sm text-slate-400 mt-1">Sign in to your merchant or owner portal</p>
+      <div className="flex h-screen bg-slate-950 font-sans text-slate-100 items-center justify-center p-6 relative">
+        <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden relative z-10">
+          <div className="flex border-b border-slate-800">
+            <button onClick={() => setLoginGateway('management')} className={`flex-1 py-4 font-bold text-sm tracking-wide ${loginGateway === 'management' ? 'bg-slate-800 text-white' : 'text-slate-500 hover:text-slate-300'}`}>MANAGEMENT HQ</button>
+            <button onClick={() => setLoginGateway('terminal')} className={`flex-1 py-4 font-bold text-sm tracking-wide ${loginGateway === 'terminal' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}>POS TERMINAL</button>
           </div>
-
-          <form onSubmit={handleAuth} className="space-y-5">
-            <div>
-              <label className="block text-xs font-bold text-slate-400 tracking-wider uppercase mb-2">Corporate Email</label>
-              <input 
-                required 
-                type="email" 
-                value={email} 
-                onChange={e => setEmail(e.target.value)} 
-                className="w-full px-4 py-3 bg-slate-950/50 border border-slate-800 rounded-xl focus:ring-2 focus:ring-slate-400 outline-none transition text-sm text-white placeholder-slate-600" 
-                placeholder="name@company.com" 
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-bold text-slate-400 tracking-wider uppercase mb-2">Password</label>
-              <input 
-                required 
-                type="password" 
-                value={password} 
-                onChange={e => setPassword(e.target.value)} 
-                className="w-full px-4 py-3 bg-slate-950/50 border border-slate-800 rounded-xl focus:ring-2 focus:ring-slate-400 outline-none transition text-sm text-white placeholder-slate-600" 
-                placeholder="••••••••••••" 
-              />
-            </div>
-            <button 
-              disabled={isProcessing} 
-              type="submit" 
-              className="w-full bg-white text-slate-950 font-bold py-3.5 rounded-xl hover:bg-slate-200 active:scale-[0.99] transition shadow-lg text-sm tracking-wide mt-2"
-            >
-              {isProcessing ? 'Authenticating...' : (isSignUp ? 'Create Account' : 'Access Portal')}
-            </button>
-          </form>
-
-          <div className="text-center mt-6 pt-6 border-t border-slate-800/80">
-            <button 
-              onClick={() => setIsSignUp(!isSignUp)} 
-              className="text-xs text-slate-400 hover:text-white transition font-medium"
-            >
-              {isSignUp ? 'Already registered? Sign in here' : "Need a merchant account? Register workspace"}
-            </button>
+          
+          <div className="p-10">
+            {loginGateway === 'management' ? (
+              <form onSubmit={handleManagementLogin} className="space-y-5">
+                <div className="text-center mb-6"><h2 className="text-2xl font-black text-white">Back-Office Login</h2><p className="text-xs text-slate-400 mt-1">For Owners & Merchants</p></div>
+                <input required type="email" value={email} onChange={e => setEmail(e.target.value)} className="w-full px-4 py-3 bg-slate-950 border border-slate-700 rounded-xl outline-none text-white placeholder-slate-500" placeholder="Admin Email" />
+                <input required type="password" value={password} onChange={e => setPassword(e.target.value)} className="w-full px-4 py-3 bg-slate-950 border border-slate-700 rounded-xl outline-none text-white placeholder-slate-500" placeholder="Password" />
+                <button disabled={isProcessing} type="submit" className="w-full bg-white text-slate-900 font-bold py-3.5 rounded-xl hover:bg-slate-200 transition mt-2">Sign In</button>
+              </form>
+            ) : (
+              <form onSubmit={handleTerminalLogin} className="space-y-5">
+                <div className="text-center mb-6"><h2 className="text-2xl font-black text-white">Cashier Terminal</h2><p className="text-xs text-slate-400 mt-1">Locked Register Environment</p></div>
+                <input required type="text" value={storeCode} onChange={e => setStoreCode(e.target.value)} className="w-full px-4 py-3 bg-slate-950 border border-blue-900 focus:border-blue-500 rounded-xl outline-none text-white placeholder-slate-500 uppercase font-mono" placeholder="Store Code (e.g. HP-XXXXX)" />
+                <input required type="password" value={terminalPin} onChange={e => setTerminalPin(e.target.value)} className="w-full px-4 py-3 bg-slate-950 border border-blue-900 focus:border-blue-500 rounded-xl outline-none text-white placeholder-slate-500 tracking-widest text-center text-xl" placeholder="••••" maxLength="6" />
+                <button disabled={isProcessing} type="submit" className="w-full bg-blue-600 text-white font-bold py-3.5 rounded-xl hover:bg-blue-700 transition mt-2">Unlock Register</button>
+              </form>
+            )}
           </div>
         </div>
       </div>
     )
   }
 
-  // --- LOADING SCREEN ---
-  if (loadingTenant || !tenant) {
+  // ==========================================
+  // RENDER: 2. TIER 1 - GLOBAL HQ
+  // ==========================================
+  if (activeRole === 'owner') {
     return (
-      <div className="flex h-screen bg-slate-950 text-white items-center justify-center font-sans">
-        <div className="flex items-center gap-3">
-          <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-          <span className="text-sm font-medium tracking-wide text-slate-400">Loading secure session...</span>
+      <div className="min-h-screen bg-slate-950 text-white p-8 font-sans">
+        <div className="max-w-6xl mx-auto flex justify-between items-center mb-10 border-b border-slate-800 pb-6">
+          <div><p className="text-blue-400 font-bold text-xs tracking-widest uppercase mb-1">HarminSolutions Administrator</p><h1 className="text-3xl font-black">Global HQ Console</h1></div>
+          <button onClick={handleLogout} className="bg-red-900/40 text-red-400 border border-red-900 px-6 py-2.5 rounded-lg font-bold hover:bg-red-800/60 transition text-sm">Terminate Session</button>
         </div>
       </div>
     )
   }
 
-  // --- VIEW: OWNER SUPER ADMIN DASHBOARD (EXCLUSIVE) ---
-  if (isOwner) {
-    const totalPlatformRevenue = platformSales.reduce((sum, s) => sum + s.total_amount, 0)
-
+  // ==========================================
+  // RENDER: 3. TIER 2 - MERCHANT BACK-OFFICE
+  // ==========================================
+  if (activeRole === 'merchant_dashboard') {
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 p-8 font-sans">
-        <div className="max-w-6xl mx-auto">
-          <div className="flex justify-between items-center mb-8 border-b border-slate-800 pb-6">
+      <div className="flex h-screen bg-slate-50 font-sans text-slate-900">
+        <div className="w-64 bg-white border-r border-slate-200 flex flex-col z-20 shadow-sm">
+          <div className="p-6 border-b border-slate-100 bg-slate-900 text-white">
+            <h2 className="font-black text-xl tracking-tight leading-tight">{tenant.business_name}</h2>
+            <div className="flex items-center gap-2 mt-3">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Store Code:</span>
+              <span className="text-xs bg-slate-800 px-2 py-1 rounded border border-slate-700 font-mono text-blue-400">{tenant.store_code || 'PENDING'}</span>
+            </div>
+            <div className="flex items-center gap-2 mt-2">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Terminal PIN:</span>
+              <span className="text-xs bg-slate-800 px-2 py-1 rounded border border-slate-700 font-mono text-emerald-400">{tenant.terminal_pin}</span>
+            </div>
+          </div>
+          <div className="flex-1 p-4 space-y-1">
+            <button onClick={() => setActiveTab('overview')} className={`w-full text-left px-4 py-3 rounded-lg font-bold text-sm ${activeTab === 'overview' ? 'bg-slate-100 text-slate-900' : 'text-slate-500 hover:bg-slate-50'}`}>Performance Analytics</button>
+            <button onClick={() => setActiveTab('inventory')} className={`w-full text-left px-4 py-3 rounded-lg font-bold text-sm ${activeTab === 'inventory' ? 'bg-slate-100 text-slate-900' : 'text-slate-500 hover:bg-slate-50'}`}>Inventory Control</button>
+            <button onClick={() => setActiveTab('reports')} className={`w-full text-left px-4 py-3 rounded-lg font-bold text-sm flex justify-between ${activeTab === 'reports' ? 'bg-slate-100 text-slate-900' : 'text-slate-500 hover:bg-slate-50'}`}>
+              End of Month Reports {isReportDay && <span className="w-2 h-2 rounded-full bg-red-500 mt-1.5"></span>}
+            </button>
+            <button onClick={() => setActiveTab('settings')} className={`w-full text-left px-4 py-3 rounded-lg font-bold text-sm ${activeTab === 'settings' ? 'bg-slate-100 text-slate-900' : 'text-slate-500 hover:bg-slate-50'}`}>Store Settings & LHDN</button>
+          </div>
+          <div className="p-4 border-t border-slate-100"><button onClick={handleLogout} className="w-full bg-white border border-slate-300 text-slate-700 px-4 py-3 rounded-lg font-bold text-sm hover:bg-slate-50 transition">Log Out</button></div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-10 bg-slate-50 relative">
+          {!tenant.is_approved && (
+            <div className="bg-orange-100 border border-orange-300 text-orange-800 p-4 rounded-xl mb-8 font-medium text-sm flex items-center justify-between">
+              <span>⚠️ Your merchant account is strictly in <b>Pending Verification</b> mode. Core features are restricted.</span>
+              <button className="bg-orange-800 text-white px-4 py-1.5 rounded-lg text-xs font-bold hover:bg-orange-900">Contact HarminSolutions HQ</button>
+            </div>
+          )}
+
+          {activeTab === 'overview' && (
             <div>
-              <span className="bg-blue-900/50 text-blue-400 border border-blue-700/50 text-xs px-3 py-1 rounded-full font-bold uppercase tracking-wider">Software Owner Console</span>
-              <h1 className="text-3xl font-black tracking-tight text-white mt-2">HarminSolutions Global HQ</h1>
+              <h1 className="text-3xl font-black mb-8 tracking-tight">Financial Overview</h1>
+              <div className="grid grid-cols-3 gap-6">
+                <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm"><p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Total Gross Sales</p><p className="text-3xl font-black text-slate-900">RM {salesData.reduce((s, a) => s + a.total_amount, 0).toFixed(2)}</p></div>
+                <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm"><p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Total Net Profit</p><p className="text-3xl font-black text-emerald-600">RM {salesData.reduce((s, a) => s + (a.total_profit || 0), 0).toFixed(2)}</p></div>
+                <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm"><p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Total Tax (SST)</p><p className="text-3xl font-black text-slate-900">RM {salesData.reduce((s, a) => s + a.sst_amount, 0).toFixed(2)}</p></div>
+              </div>
             </div>
-            <div className="flex gap-4">
-              <button onClick={handleLogout} className="bg-red-600/20 text-red-400 border border-red-500/30 px-6 py-2.5 rounded-xl font-bold text-sm hover:bg-red-600/30 transition">
-                Sign Out
-              </button>
-            </div>
-          </div>
+          )}
 
-          <div className="grid grid-cols-3 gap-6 mb-8">
-            <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-lg">
-              <p className="text-xs text-slate-400 uppercase font-bold tracking-wider">Active Tenants / Stores</p>
-              <p className="text-4xl font-black text-white mt-2">{allTenants.length}</p>
+          {activeTab === 'inventory' && (
+            <div>
+              <h1 className="text-3xl font-black mb-8 tracking-tight">Inventory Control</h1>
+              <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm mb-8 relative overflow-hidden">
+                {!tenant.is_approved && <div className="absolute inset-0 bg-white/60 backdrop-blur-[2px] z-10 flex items-center justify-center"><div className="bg-slate-900 text-white px-6 py-3 rounded-xl font-bold text-sm shadow-xl flex items-center gap-2">🔒 Inventory addition restricted pending HQ approval</div></div>}
+                <h3 className="font-bold mb-5 text-lg">Register New Product</h3>
+                <form onSubmit={handleAddProduct} className="grid grid-cols-4 gap-4 items-end">
+                  <div className="col-span-2"><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Product Name</label><input required type="text" value={newProduct.name} onChange={e => setNewProduct({...newProduct, name: e.target.value})} className="w-full p-3 border border-slate-300 rounded-xl text-sm outline-none focus:border-slate-500" /></div>
+                  <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Image URL (Optional)</label><input type="text" value={newProduct.image_url} onChange={e => setNewProduct({...newProduct, image_url: e.target.value})} className="w-full p-3 border border-slate-300 rounded-xl text-sm outline-none focus:border-slate-500" placeholder="https://..." /></div>
+                  <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Category</label><select value={newProduct.category} onChange={e => setNewProduct({...newProduct, category: e.target.value})} className="w-full p-3 border border-slate-300 rounded-xl text-sm outline-none bg-white"><option>Beverages</option><option>Meals</option></select></div>
+                  <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Cost Price (RM)</label><input required type="number" step="0.01" value={newProduct.cost_price} onChange={e => setNewProduct({...newProduct, cost_price: e.target.value})} className="w-full p-3 border border-slate-300 rounded-xl text-sm outline-none focus:border-slate-500" /></div>
+                  <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Selling Price (RM)</label><input required type="number" step="0.01" value={newProduct.price} onChange={e => setNewProduct({...newProduct, price: e.target.value})} className="w-full p-3 border border-slate-300 rounded-xl text-sm outline-none focus:border-slate-500" /></div>
+                  <div className="col-span-2"><button type="submit" className="w-full bg-slate-900 text-white font-bold py-3 rounded-xl hover:bg-slate-800 text-sm">Save to Register</button></div>
+                </form>
+              </div>
             </div>
-            <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-lg">
-              <p className="text-xs text-slate-400 uppercase font-bold tracking-wider">Total Platform Sales</p>
-              <p className="text-4xl font-black text-white mt-2">{platformSales.length} orders</p>
-            </div>
-            <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-lg">
-              <p className="text-xs text-slate-400 uppercase font-bold tracking-wider">Gross Platform Revenue</p>
-              <p className="text-4xl font-black text-emerald-400 mt-2">RM {totalPlatformRevenue.toFixed(2)}</p>
-            </div>
-          </div>
+          )}
 
-          <div className="grid grid-cols-2 gap-8">
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-lg">
-              <h2 className="text-xl font-bold mb-4 text-white">Registered Tenants</h2>
-              <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2">
-                {allTenants.map(t => (
-                  <div key={t.id} className="flex justify-between items-center bg-slate-950/60 p-4 rounded-xl border border-slate-800/80">
-                    <div>
-                      <p className="font-bold text-white">{t.business_name || 'Unnamed Store'}</p>
-                      <p className="text-xs text-slate-500 font-mono mt-0.5">ID: {t.id}</p>
-                    </div>
-                    <span className="text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2.5 py-1 rounded-full font-semibold">Active</span>
+          {activeTab === 'reports' && (
+            <div>
+              <h1 className="text-3xl font-black mb-4 tracking-tight">End of Month Reports</h1>
+              <p className="text-slate-500 mb-8 max-w-2xl">To ensure accurate accounting and prevent premature data manipulation, compiled financial reports are strictly available for extraction on the 30th of each calendar month per HarminSolutions platform protocol.</p>
+              
+              {isReportDay ? (
+                <div className="bg-emerald-50 border border-emerald-200 p-8 rounded-2xl">
+                  <h3 className="text-emerald-900 font-black text-xl mb-2">Reports are ready for download!</h3>
+                  <p className="text-emerald-700 text-sm mb-6">Your data for the month is finalized and ready for extraction.</p>
+                  <div className="flex gap-4">
+                    <button onClick={downloadCSV} className="bg-emerald-600 text-white px-6 py-3 rounded-xl font-bold shadow-lg hover:bg-emerald-700 transition flex items-center gap-2">Download Excel / CSV</button>
+                    <button onClick={downloadPDF} className="bg-white text-emerald-700 border border-emerald-200 px-6 py-3 rounded-xl font-bold shadow-sm hover:bg-emerald-100 transition">Print PDF Report</button>
                   </div>
-                ))}
+                </div>
+              ) : (
+                <div className="bg-white border border-slate-200 p-10 rounded-2xl text-center flex flex-col items-center justify-center">
+                  <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center text-2xl mb-4">🔒</div>
+                  <h3 className="text-slate-900 font-black text-xl mb-2">Vault Locked</h3>
+                  <p className="text-slate-500 text-sm max-w-md">The financial reporting vault is currently sealed. Please return on the 30th of the month to extract your official P&L statements.</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'settings' && (
+            <div className="max-w-2xl">
+              <h1 className="text-3xl font-black mb-8 tracking-tight">Store Settings & Compliance</h1>
+              <div className="space-y-4">
+                <div className="bg-white p-6 rounded-2xl border border-slate-200 flex justify-between items-center opacity-60 grayscale cursor-not-allowed">
+                  <div><h3 className="font-bold text-slate-900">LHDN e-Invoice API Key (Production)</h3><p className="text-xs text-slate-500 mt-1">Direct synchronization with Malaysian tax authorities.</p></div>
+                  <button disabled className="bg-slate-200 text-slate-500 px-4 py-2 rounded-lg font-bold text-xs flex items-center gap-2">🔒 Locked by HQ</button>
+                </div>
+                <div className="bg-white p-6 rounded-2xl border border-slate-200 flex justify-between items-center opacity-60 grayscale cursor-not-allowed">
+                  <div><h3 className="font-bold text-slate-900">Custom Domain Configuration</h3><p className="text-xs text-slate-500 mt-1">Route your store to your own URL.</p></div>
+                  <button disabled className="bg-slate-200 text-slate-500 px-4 py-2 rounded-lg font-bold text-xs flex items-center gap-2">🔒 Locked by HQ</button>
+                </div>
               </div>
             </div>
-
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-lg">
-              <h2 className="text-xl font-bold mb-4 text-white">Global Sales Audit Trail</h2>
-              <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2">
-                {platformSales.length === 0 ? (
-                  <p className="text-slate-500 text-sm">No transactions recorded across the platform yet.</p>
-                ) : (
-                  platformSales.map(s => (
-                    <div key={s.id} className="flex justify-between items-center bg-slate-950/60 p-3.5 rounded-xl border border-slate-800/80 text-sm">
-                      <div>
-                        <p className="font-bold text-white">RM {s.total_amount.toFixed(2)}</p>
-                        <p className="text-xs text-slate-400">Store ID: {s.tenant_id?.slice(0, 8)}... · {new Date(s.created_at).toLocaleTimeString()}</p>
-                      </div>
-                      <span className="text-xs font-mono text-slate-500">{s.lhdn_buyer_tin ? 'B2B e-Invoice' : 'B2C Sale'}</span>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  // --- VIEW: KITCHEN DISPLAY (KDS) ---
-  if (view === 'kds') {
-    return (
-      <div className="min-h-screen bg-slate-900 p-6 font-sans text-white">
-        <div className="flex justify-between items-center mb-8">
-          <div>
-            <h1 className="text-3xl font-black">Kitchen Display</h1>
-            <p className="text-xs text-slate-400">Store: {tenant.business_name}</p>
-          </div>
-          <div className="flex gap-4">
-            <button onClick={() => fetchKitchenOrders(tenant.id)} className="bg-slate-700 px-6 py-3 rounded-xl font-bold hover:bg-slate-600 transition">Refresh</button>
-            <button onClick={() => setView('pos')} className="bg-red-500 px-6 py-3 rounded-xl font-bold hover:bg-red-600 transition">Exit KDS</button>
-          </div>
-        </div>
-        <div className="flex gap-6 overflow-x-auto pb-4">
-          {kitchenOrders.length === 0 ? (
-            <div className="text-slate-500 text-xl w-full text-center mt-20">No pending orders. Kitchen is clear!</div>
-          ) : (
-            kitchenOrders.map(order => (
-              <div key={order.id} className="bg-white text-slate-900 min-w-[300px] w-[300px] flex flex-col rounded-2xl shadow-xl overflow-hidden shrink-0">
-                <div className="bg-yellow-400 p-4 font-black flex justify-between items-center">
-                  <span className="text-xl">#{order.receipt_no}</span>
-                  <span className="text-sm font-bold bg-yellow-500 px-2 py-1 rounded">
-                    {new Date(order.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                  </span>
-                </div>
-                <div className="p-4 flex-1 overflow-y-auto space-y-4 font-medium text-lg">
-                  {order.items.map((item, i) => (
-                    <div key={i} className="flex justify-between border-b border-slate-100 pb-2 last:border-0">
-                      <span><span className="font-black mr-2">{item.qty}x</span> {item.name}</span>
-                    </div>
-                  ))}
-                </div>
-                <div className="p-4 bg-slate-50 border-t border-slate-200">
-                  <button onClick={() => handleCompleteOrder(order.id)} className="w-full bg-green-500 text-white font-black py-4 rounded-xl hover:bg-green-600 active:scale-95 transition text-lg">
-                    BUMP (READY)
-                  </button>
-                </div>
-              </div>
-            ))
           )}
         </div>
       </div>
     )
   }
 
-  // --- VIEW: ADMIN BACK-OFFICE ---
-  if (view === 'admin') {
-    return (
-      <div className="min-h-screen bg-slate-50 p-8 font-sans text-slate-800">
-        <div className="max-w-4xl mx-auto">
-          <div className="flex justify-between items-center mb-8">
-            <div>
-              <h1 className="text-3xl font-black text-slate-900">Manager Back-Office</h1>
-              <p className="text-xs text-slate-500">Managing Inventory for: {tenant.business_name}</p>
+  // ==========================================
+  // RENDER: 4. TIER 3 - POS TERMINAL (CASHIERS)
+  // ==========================================
+  if (activeRole === 'pos_terminal') {
+    if (receiptData) {
+      return (
+        <div className="flex h-screen bg-slate-900 items-center justify-center">
+          <div className="bg-white p-8 max-w-md w-full rounded-2xl text-center font-mono text-sm shadow-2xl">
+            <h2 className="font-black text-2xl mb-2">{tenant.business_name}</h2>
+            <p className="text-slate-500 mb-6 border-b border-dashed border-slate-300 pb-6">Terminal Receipt #{receiptData.receiptNo}</p>
+            <div className="space-y-3 mb-6">
+              {receiptData.items.map(i => <div key={i.id} className="flex justify-between"><span>{i.qty}x {i.name}</span><span>RM {(i.price * i.qty).toFixed(2)}</span></div>)}
             </div>
-            <button onClick={() => setView('pos')} className="bg-slate-200 px-4 py-2 rounded-lg font-bold hover:bg-slate-300">
-              Return to POS
-            </button>
-          </div>
-
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 mb-8">
-            <h2 className="text-xl font-bold mb-4">Add New Product</h2>
-            <form onSubmit={handleAddProduct} className="flex gap-4 items-end">
-              <div className="flex-1">
-                <label className="block text-sm font-bold text-slate-600 mb-1">Product Name</label>
-                <input required type="text" value={newProduct.name} onChange={e => setNewProduct({...newProduct, name: e.target.value})} className="w-full p-2.5 border border-slate-300 rounded-lg" placeholder="e.g. Mocha Frappe" />
-              </div>
-              <div className="w-32">
-                <label className="block text-sm font-bold text-slate-600 mb-1">Price (RM)</label>
-                <input required type="number" step="0.01" value={newProduct.price} onChange={e => setNewProduct({...newProduct, price: e.target.value})} className="w-full p-2.5 border border-slate-300 rounded-lg" placeholder="12.50" />
-              </div>
-              <div className="w-48">
-                <label className="block text-sm font-bold text-slate-600 mb-1">Category</label>
-                <select value={newProduct.category} onChange={e => setNewProduct({...newProduct, category: e.target.value})} className="w-full p-2.5 border border-slate-300 rounded-lg bg-white">
-                  <option>Beverages</option>
-                  <option>Meals</option>
-                  <option>Pastries</option>
-                </select>
-              </div>
-              <button disabled={isProcessing} type="submit" className="bg-blue-600 text-white font-bold py-2.5 px-6 rounded-lg hover:bg-blue-700">
-                {isProcessing ? 'Saving...' : 'Add Item'}
-              </button>
-            </form>
-          </div>
-
-          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-            <table className="w-full text-left">
-              <thead className="bg-slate-50 border-b border-slate-200">
-                <tr>
-                  <th className="p-4 font-bold text-slate-600">Product Name</th>
-                  <th className="p-4 font-bold text-slate-600">Category</th>
-                  <th className="p-4 font-bold text-slate-600">Price</th>
-                  <th className="p-4 font-bold text-slate-600 text-right">Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {products.map(p => (
-                  <tr key={p.id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50">
-                    <td className="p-4 font-medium">{p.name}</td>
-                    <td className="p-4 text-slate-500">{p.category}</td>
-                    <td className="p-4 font-bold">RM {p.price.toFixed(2)}</td>
-                    <td className="p-4 text-right">
-                      <button onClick={() => handleDeleteProduct(p.id)} className="text-red-500 hover:text-red-700 font-bold text-sm">Delete</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="border-t border-dashed border-slate-300 pt-4 space-y-2 mb-8 font-bold">
+              <div className="flex justify-between"><span>Total (Inc. SST)</span><span className="text-lg">RM {receiptData.total.toFixed(2)}</span></div>
+            </div>
+            {receiptData.tin && <div className="bg-slate-100 p-3 rounded mb-6 text-xs text-slate-600">e-Invoice B2B Registered: {receiptData.tin}</div>}
+            <button onClick={() => setReceiptData(null)} className="w-full bg-slate-900 text-white py-4 font-bold font-sans rounded-xl hover:bg-slate-800 transition">Begin New Transaction</button>
           </div>
         </div>
-      </div>
-    )
-  }
+      )
+    }
 
-  // --- VIEW: RECEIPT SCREEN ---
-  if (view === 'receipt' && receiptData) {
     return (
-      <div className="flex h-screen bg-slate-800 items-center justify-center p-6">
-        <div className="bg-white w-full max-w-sm p-8 shadow-2xl rounded-sm flex flex-col font-mono text-sm text-slate-800 relative">
-          <div className="text-center mb-6 border-b border-dashed border-slate-300 pb-6">
-            <h2 className="text-2xl font-black mb-1">HarminPOS</h2>
-            <p className="text-xs text-slate-500">{tenant.business_name}</p>
-            <p className="text-xs text-slate-500 mt-2">Date: {receiptData.date}</p>
-            <p className="text-xs text-slate-500">Receipt #: {receiptData.receiptNo}</p>
+      <div className="flex h-screen bg-slate-100 font-sans select-none">
+        <div className="w-[70%] p-6 flex flex-col border-r border-slate-200">
+          <div className="flex justify-between items-center mb-6">
+            <div><h1 className="text-2xl font-black text-slate-900">Register Terminal</h1><p className="text-xs text-slate-500 font-bold uppercase tracking-wider mt-1">{tenant.business_name} · Staff Mode</p></div>
+            <button onClick={handleLogout} className="text-xs font-bold text-red-500 hover:text-white border border-red-200 hover:bg-red-500 px-4 py-2 rounded-lg transition">Close Register</button>
           </div>
-          <div className="flex-1 overflow-y-auto space-y-3 mb-6">
-            {receiptData.items.map((item, index) => (
-              <div key={index} className="flex justify-between">
-                <div>
-                  <p>{item.name}</p>
-                  <p className="text-xs text-slate-500">{item.qty} x RM {item.price.toFixed(2)}</p>
+          
+          <div className="grid grid-cols-4 gap-4 overflow-y-auto pr-2 pb-10">
+            {products.map(product => (
+              <button key={product.id} onClick={() => addToCart(product)} className="bg-white rounded-2xl border border-slate-200 shadow-sm text-left active:scale-95 transition overflow-hidden flex flex-col h-44 group hover:border-blue-400 hover:shadow-md">
+                {product.image_url ? (
+                  <div className="h-24 w-full bg-slate-100 overflow-hidden"><img src={product.image_url} alt={product.name} className="w-full h-full object-cover group-hover:scale-105 transition duration-300" /></div>
+                ) : (
+                  <div className="h-24 w-full bg-slate-50 flex items-center justify-center text-slate-300 border-b border-slate-100">No Image</div>
+                )}
+                <div className="p-3 flex-1 flex flex-col justify-between">
+                  <span className="font-bold text-sm leading-tight text-slate-800 line-clamp-2">{product.name}</span>
+                  <span className="font-black text-blue-600 text-sm mt-1">RM {product.price.toFixed(2)}</span>
                 </div>
-                <p>RM {(item.price * item.qty).toFixed(2)}</p>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="w-[30%] bg-white flex flex-col shadow-2xl z-10">
+          <div className="p-6 bg-slate-900 text-white flex justify-between items-center">
+            <h2 className="font-black text-lg">Active Order</h2>
+            <span className="bg-slate-700 text-xs px-2.5 py-1 rounded-full font-bold">{cart.reduce((t, i) => t + i.qty, 0)} Items</span>
+          </div>
+          
+          <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-50">
+            {cart.map(item => (
+              <div key={item.id} className="flex flex-col bg-white p-3 rounded-xl border border-slate-200 shadow-sm">
+                <div className="flex justify-between items-start mb-3">
+                  <span className="font-bold text-sm text-slate-900 flex-1 pr-2 leading-tight">{item.name}</span>
+                  <span className="font-black text-sm text-blue-600">RM {(item.price * item.qty).toFixed(2)}</span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <button onClick={() => updateQty(item.id, -1)} className="w-8 h-8 rounded bg-slate-100 text-slate-600 font-bold hover:bg-slate-200">-</button>
+                  <span className="font-black text-sm w-4 text-center">{item.qty}</span>
+                  <button onClick={() => updateQty(item.id, 1)} className="w-8 h-8 rounded bg-slate-100 text-slate-600 font-bold hover:bg-slate-200">+</button>
+                </div>
               </div>
             ))}
           </div>
-          <div className="border-t border-dashed border-slate-300 pt-4 space-y-2 mb-6">
-            <div className="flex justify-between text-slate-600"><span>Subtotal</span><span>RM {receiptData.subtotal.toFixed(2)}</span></div>
-            <div className="flex justify-between text-slate-600"><span>SST (6%)</span><span>RM {receiptData.sst.toFixed(2)}</span></div>
-            <div className="flex justify-between text-lg font-bold pt-2"><span>Total</span><span>RM {receiptData.total.toFixed(2)}</span></div>
-          </div>
-          {receiptData.tin && (
-            <div className="bg-slate-100 p-3 rounded text-center mb-6 text-xs border border-slate-200">
-              <p className="font-bold">LHDN e-Invoice Requested</p>
-              <p>Buyer TIN: {receiptData.tin}</p>
+          
+          <div className="p-6 bg-white border-t border-slate-200 shadow-[0_-10px_40px_-15px_rgba(0,0,0,0.1)]">
+            <div className="bg-blue-50 border border-blue-100 p-3 rounded-xl mb-4">
+              <label className="flex items-center justify-between text-xs font-bold text-blue-900 cursor-pointer">
+                <span>Enable B2B e-Invoice (LHDN Law)</span>
+                <input type="checkbox" checked={showLhdn} onChange={(e) => setShowLhdn(e.target.checked)} className="w-4 h-4 rounded" />
+              </label>
+              {showLhdn && <input type="text" placeholder="Scan or Enter Buyer TIN" value={tin} onChange={(e) => setTin(e.target.value)} className="mt-3 w-full text-xs p-2.5 rounded border border-blue-200 outline-none" />}
             </div>
-          )}
-          <button onClick={() => setView('pos')} className="w-full bg-slate-900 text-white font-bold py-3 rounded hover:bg-slate-800 transition font-sans">New Sale</button>
+            <div className="space-y-1.5 mb-4 text-sm font-medium text-slate-500">
+              <div className="flex justify-between"><span>Subtotal</span><span>RM {cart.reduce((s, i) => s + (i.price * i.qty), 0).toFixed(2)}</span></div>
+              <div className="flex justify-between"><span>SST (6%)</span><span>RM {(cart.reduce((s, i) => s + (i.price * i.qty), 0) * 0.06).toFixed(2)}</span></div>
+              <div className="flex justify-between text-xl font-black text-slate-900 pt-3 border-t border-slate-100 mt-2">
+                <span>Total Due</span>
+                <span>RM {(cart.reduce((s, i) => s + (i.price * i.qty), 0) * 1.06).toFixed(2)}</span>
+              </div>
+            </div>
+            <button disabled={cart.length === 0 || isProcessing} onClick={handleCheckout} className="w-full bg-blue-600 text-white font-black py-4 rounded-xl text-lg hover:bg-blue-700 disabled:bg-slate-200 disabled:text-slate-400 transition">
+              {isProcessing ? 'Transmitting to LHDN...' : `Charge RM ${(cart.reduce((s, i) => s + (i.price * i.qty), 0) * 1.06).toFixed(2)}`}
+            </button>
+          </div>
         </div>
       </div>
     )
   }
-
-  // --- VIEW: MAIN POS REGISTER (CLIENTS ONLY) ---
-  return (
-    <div className="flex h-screen bg-slate-100 font-sans text-slate-800 antialiased">
-      <div className="w-[70%] p-6 flex flex-col border-r border-slate-200">
-        <div className="flex justify-between items-center mb-6">
-          <div>
-            <h1 className="text-2xl font-black tracking-tight text-slate-900">HarminPOS</h1>
-            <p className="text-xs text-slate-500 font-medium">Store: {tenant.business_name} · <button onClick={handleLogout} className="text-blue-600 hover:underline">Sign Out</button></p>
-          </div>
-          <div className="flex gap-2">
-            <button onClick={() => setView('kds')} className="bg-yellow-400 text-yellow-900 px-4 py-2.5 rounded-xl font-bold text-sm shadow-sm hover:bg-yellow-500">Kitchen Display</button>
-            <button onClick={() => setView('admin')} className="bg-slate-200 px-4 py-2.5 rounded-xl font-bold text-sm hover:bg-slate-300">Manager Mode</button>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-3 gap-4 overflow-y-auto pr-1">
-          {products.length === 0 ? <div className="col-span-3 text-slate-500 text-sm py-10">No products found. Go to Manager Mode to add inventory!</div> : 
-            products.map(product => (
-              <button key={product.id} onClick={() => addToCart(product)} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm text-left hover:border-slate-400 hover:shadow transition active:scale-95 flex flex-col justify-between h-32">
-                <span className="font-semibold text-slate-900">{product.name}</span>
-                <span className="text-base font-bold text-slate-900">RM {product.price.toFixed(2)}</span>
-              </button>
-            ))
-          }
-        </div>
-      </div>
-
-      <div className="w-[30%] bg-white flex flex-col shadow-xl">
-        <div className="p-6 border-b border-slate-100 flex justify-between items-center">
-          <h2 className="text-lg font-bold text-slate-900">Current Order</h2>
-          <span className="text-xs bg-slate-100 px-2.5 py-1 rounded-full font-semibold text-slate-600">{cart.reduce((t, i) => t + i.qty, 0)} items</span>
-        </div>
-
-        <div className="flex-1 p-6 overflow-y-auto space-y-3">
-          {cart.length === 0 ? <div className="h-full flex flex-col items-center justify-center text-slate-400 text-sm">Tap items to add to order</div> : 
-            cart.map(item => (
-              <div key={item.id} className="flex justify-between items-center bg-slate-50 p-3.5 rounded-xl border border-slate-100">
-                <div className="flex-1 pr-2">
-                  <p className="font-semibold text-sm text-slate-900">{item.name}</p>
-                  <p className="text-xs text-slate-500">RM {item.price.toFixed(2)}</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button onClick={() => updateQty(item.id, -1)} className="w-7 h-7 rounded-lg bg-white border border-slate-200 text-slate-700 font-bold text-sm">-</button>
-                  <span className="text-sm font-bold w-4 text-center">{item.qty}</span>
-                  <button onClick={() => updateQty(item.id, 1)} className="w-7 h-7 rounded-lg bg-white border border-slate-200 text-slate-700 font-bold text-sm">+</button>
-                </div>
-              </div>
-            ))
-          }
-        </div>
-
-        <div className="p-6 bg-slate-50 border-t border-slate-100 space-y-4">
-          <div className="bg-white p-3.5 rounded-xl border border-slate-200">
-            <label className="flex items-center justify-between text-xs font-bold text-slate-700 cursor-pointer">
-              <span>LHDN e-Invoice (B2B)</span>
-              <input type="checkbox" checked={showLhdn} onChange={(e) => setShowLhdn(e.target.checked)} className="w-4 h-4 rounded accent-slate-900" />
-            </label>
-            {showLhdn && <input type="text" placeholder="Buyer Tax ID (TIN)" value={tin} onChange={(e) => setTin(e.target.value)} className="mt-2.5 w-full text-xs p-2.5 rounded-lg border border-slate-300 focus:outline-none focus:ring-1 focus:ring-slate-900" />}
-          </div>
-
-          <div className="space-y-1.5 text-xs text-slate-600 font-medium">
-            <div className="flex justify-between"><span>Subtotal</span><span>RM {subtotal.toFixed(2)}</span></div>
-            <div className="flex justify-between"><span>SST (6%)</span><span>RM {sst.toFixed(2)}</span></div>
-            <div className="flex justify-between text-base font-black text-slate-900 pt-2 border-t border-slate-200"><span>Total</span><span>RM {total.toFixed(2)}</span></div>
-          </div>
-
-          <button disabled={cart.length === 0 || isProcessing} onClick={handleCheckout} className="w-full bg-slate-900 text-white font-bold py-3.5 rounded-xl hover:bg-slate-800 disabled:bg-slate-300 transition shadow-sm text-sm">
-            {isProcessing ? 'Processing...' : `Charge RM ${total.toFixed(2)}`}
-          </button>
-        </div>
-      </div>
-    </div>
-  )
 }
