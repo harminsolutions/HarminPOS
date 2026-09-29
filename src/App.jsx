@@ -31,6 +31,7 @@ export default function App() {
 
   const OWNER_EMAIL = 'harminsolutions96@gmail.com'
 
+  // 1. Initialize Auth and Routing
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
@@ -59,6 +60,7 @@ export default function App() {
     setIsOwner(userEmail === OWNER_EMAIL)
   }
 
+  // 2. Fetch or Create Store Profile
   const fetchTenantData = async (userId, userEmail) => {
     setLoadingTenant(true)
     
@@ -87,6 +89,7 @@ export default function App() {
     if (data && userEmail !== OWNER_EMAIL) fetchProducts(data.id)
   }
 
+  // 3. Owner Analytics
   const fetchPlatformOverview = async () => {
     const { data: tenantsData } = await supabase.from('tenants').select('*')
     const { data: salesData } = await supabase.from('sales').select('*')
@@ -94,6 +97,7 @@ export default function App() {
     setPlatformSales(salesData || [])
   }
 
+  // 4. Client Inventory
   const fetchProducts = async (tenantId) => {
     const { data, error } = await supabase
       .from('products')
@@ -105,6 +109,7 @@ export default function App() {
     else setProducts(data || [])
   }
 
+  // 5. KDS Polling
   useEffect(() => {
     let interval;
     if (view === 'kds' && tenant && !isOwner) {
@@ -125,6 +130,7 @@ export default function App() {
     setKitchenOrders(data || [])
   }
 
+  // 6. User Actions
   const handleAuth = async (e) => {
     e.preventDefault()
     setIsProcessing(true)
@@ -249,6 +255,10 @@ export default function App() {
     fetchKitchenOrders(tenant.id)
   }
 
+  // ==========================================
+  // RENDER VIEWS
+  // ==========================================
+
   // --- LUXURY LOGIN SCREEN ---
   if (!session) {
     return (
@@ -310,6 +320,7 @@ export default function App() {
     )
   }
 
+  // --- LOADING SCREEN ---
   if (loadingTenant || !tenant) {
     return (
       <div className="flex h-screen bg-slate-950 text-white items-center justify-center font-sans">
