@@ -31,7 +31,6 @@ export default function App() {
 
   const OWNER_EMAIL = 'harminsolutions96@gmail.com'
 
-  // 1. Check Auth Session on Load
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
@@ -57,17 +56,12 @@ export default function App() {
   }, [])
 
   const checkIfOwner = (userEmail) => {
-    if (userEmail === OWNER_EMAIL) {
-      setIsOwner(true)
-    } else {
-      setIsOwner(false)
-    }
+    setIsOwner(userEmail === OWNER_EMAIL)
   }
 
   const fetchTenantData = async (userId, userEmail) => {
     setLoadingTenant(true)
     
-    // If owner, fetch global platform overview data
     if (userEmail === OWNER_EMAIL) {
       fetchPlatformOverview()
     }
@@ -76,7 +70,7 @@ export default function App() {
       .from('tenants')
       .select('*')
       .eq('user_id', userId)
-      .single()
+      .maybeSingle()
 
     if (error || !data) {
       const { data: newTenant, error: createError } = await supabase
@@ -95,7 +89,7 @@ export default function App() {
 
   const fetchPlatformOverview = async () => {
     const { data: tenantsData } = await supabase.from('tenants').select('*')
-    const { data: salesData } = await supabase.from('sales').select('*, tenants(name)')
+    const { data: salesData } = await supabase.from('sales').select('*')
     setAllTenants(tenantsData || [])
     setPlatformSales(salesData || [])
   }
@@ -121,15 +115,14 @@ export default function App() {
   }, [view, tenant])
 
   const fetchKitchenOrders = async (tenantId) => {
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from('kitchen_orders')
       .select('*')
       .eq('tenant_id', tenantId)
       .eq('status', 'pending')
       .order('created_at', { ascending: true })
       
-    if (error) console.error("Error fetching KDS:", error)
-    else setKitchenOrders(data || [])
+    setKitchenOrders(data || [])
   }
 
   const handleAuth = async (e) => {
@@ -390,7 +383,7 @@ export default function App() {
                     <div key={s.id} className="flex justify-between items-center bg-slate-950/60 p-3.5 rounded-xl border border-slate-800/80 text-sm">
                       <div>
                         <p className="font-bold text-white">RM {s.total_amount.toFixed(2)}</p>
-                        <p className="text-xs text-slate-400">{s.tenants?.name || 'Store'} · {new Date(s.created_at).toLocaleTimeString()}</p>
+                        <p className="text-xs text-slate-400">Store ID: {s.tenant_id.slice(0, 8)}... · {new Date(s.created_at).toLocaleTimeString()}</p>
                       </div>
                       <span className="text-xs font-mono text-slate-500">{s.lhdn_buyer_tin ? 'B2B e-Invoice' : 'B2C Sale'}</span>
                     </div>
