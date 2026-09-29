@@ -24,7 +24,7 @@ export default function App() {
   
   const SYSTEM_ADMIN_EMAIL = 'harminsolutions96@gmail.com'
 
-  // --- 1. INITIALIZATION & SESSION MANAGEMENT ---
+  // --- 1. INITIALIZATION & SESSION MANAGEMENT (FIXED INFINITE LOOP) ---
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
@@ -36,14 +36,20 @@ export default function App() {
       setSession(session)
       if (session) {
         handleTier1And2Auth(session.user)
-      } else if (!activeStaff) { 
-        setTenant(null)
-        setActiveStaff(null)
+      } else { 
+        // Safely wipe session if logging out of Management HQ without causing loops
+        setActiveStaff((prevStaff) => {
+          if (prevStaff?.role?.tier_level <= 2) {
+            setTenant(null)
+            return null
+          }
+          return prevStaff
+        })
         setLoading(false)
       }
     })
     return () => subscription.unsubscribe()
-  }, [activeStaff])
+  }, []) // <-- FIXED: Empty dependency array stops the flickering!
 
   // --- 2. DATA FETCHING (TIER 1) ---
   const fetchPlatformOverview = async () => {
