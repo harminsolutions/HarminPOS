@@ -12,7 +12,7 @@ export default function App() {
   const [password, setPassword] = useState('')
   const [isSignUp, setIsSignUp] = useState(false)
 
-  // App Views: 'pos', 'receipt', 'admin', 'kds', 'owner'
+  // App Views: 'pos', 'receipt', 'admin', 'kds'
   const [view, setView] = useState('pos')
   const [cart, setCart] = useState([])
   const [products, setProducts] = useState([])
@@ -72,7 +72,6 @@ export default function App() {
       .eq('user_id', userId)
       .maybeSingle()
 
-    // FIXED: Changed 'name' to 'business_name' to match your database schema
     if (error || !data) {
       const { data: newTenant, error: createError } = await supabase
         .from('tenants')
@@ -85,7 +84,7 @@ export default function App() {
 
     setTenant(data)
     setLoadingTenant(false)
-    if (data) fetchProducts(data.id)
+    if (data && userEmail !== OWNER_EMAIL) fetchProducts(data.id)
   }
 
   const fetchPlatformOverview = async () => {
@@ -108,12 +107,12 @@ export default function App() {
 
   useEffect(() => {
     let interval;
-    if (view === 'kds' && tenant) {
+    if (view === 'kds' && tenant && !isOwner) {
       fetchKitchenOrders(tenant.id)
       interval = setInterval(() => fetchKitchenOrders(tenant.id), 5000)
     }
     return () => clearInterval(interval)
-  }, [view, tenant])
+  }, [view, tenant, isOwner])
 
   const fetchKitchenOrders = async (tenantId) => {
     const { data } = await supabase
@@ -145,6 +144,7 @@ export default function App() {
     setSession(null)
     setTenant(null)
     setIsOwner(false)
+    setView('pos')
   }
 
   const addToCart = (product) => {
@@ -321,8 +321,8 @@ export default function App() {
     )
   }
 
-  // --- VIEW: OWNER SUPER ADMIN DASHBOARD ---
-  if (view === 'owner' && isOwner) {
+  // --- VIEW: OWNER SUPER ADMIN DASHBOARD (EXCLUSIVE) ---
+  if (isOwner) {
     const totalPlatformRevenue = platformSales.reduce((sum, s) => sum + s.total_amount, 0)
 
     return (
@@ -334,10 +334,7 @@ export default function App() {
               <h1 className="text-3xl font-black tracking-tight text-white mt-2">HarminSolutions Global HQ</h1>
             </div>
             <div className="flex gap-4">
-              <button onClick={() => setView('pos')} className="bg-slate-800 hover:bg-slate-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm transition">
-                Switch to POS Register
-              </button>
-              <button onClick={handleLogout} className="bg-red-600/20 text-red-400 border border-red-500/30 px-4 py-2.5 rounded-xl font-bold text-sm hover:bg-red-600/30 transition">
+              <button onClick={handleLogout} className="bg-red-600/20 text-red-400 border border-red-500/30 px-6 py-2.5 rounded-xl font-bold text-sm hover:bg-red-600/30 transition">
                 Sign Out
               </button>
             </div>
@@ -361,7 +358,7 @@ export default function App() {
           <div className="grid grid-cols-2 gap-8">
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-lg">
               <h2 className="text-xl font-bold mb-4 text-white">Registered Tenants</h2>
-              <div className="space-y-3">
+              <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2">
                 {allTenants.map(t => (
                   <div key={t.id} className="flex justify-between items-center bg-slate-950/60 p-4 rounded-xl border border-slate-800/80">
                     <div>
@@ -376,7 +373,7 @@ export default function App() {
 
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-lg">
               <h2 className="text-xl font-bold mb-4 text-white">Global Sales Audit Trail</h2>
-              <div className="space-y-3 max-h-[300px] overflow-y-auto pr-1">
+              <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2">
                 {platformSales.length === 0 ? (
                   <p className="text-slate-500 text-sm">No transactions recorded across the platform yet.</p>
                 ) : (
@@ -384,7 +381,7 @@ export default function App() {
                     <div key={s.id} className="flex justify-between items-center bg-slate-950/60 p-3.5 rounded-xl border border-slate-800/80 text-sm">
                       <div>
                         <p className="font-bold text-white">RM {s.total_amount.toFixed(2)}</p>
-                        <p className="text-xs text-slate-400">Store ID: {s.tenant_id.slice(0, 8)}... · {new Date(s.created_at).toLocaleTimeString()}</p>
+                        <p className="text-xs text-slate-400">Store ID: {s.tenant_id?.slice(0, 8)}... · {new Date(s.created_at).toLocaleTimeString()}</p>
                       </div>
                       <span className="text-xs font-mono text-slate-500">{s.lhdn_buyer_tin ? 'B2B e-Invoice' : 'B2C Sale'}</span>
                     </div>
@@ -552,7 +549,7 @@ export default function App() {
     )
   }
 
-  // --- VIEW: MAIN POS REGISTER ---
+  // --- VIEW: MAIN POS REGISTER (CLIENTS ONLY) ---
   return (
     <div className="flex h-screen bg-slate-100 font-sans text-slate-800 antialiased">
       <div className="w-[70%] p-6 flex flex-col border-r border-slate-200">
@@ -562,11 +559,6 @@ export default function App() {
             <p className="text-xs text-slate-500 font-medium">Store: {tenant.business_name} · <button onClick={handleLogout} className="text-blue-600 hover:underline">Sign Out</button></p>
           </div>
           <div className="flex gap-2">
-            {isOwner && (
-              <button onClick={() => setView('owner')} className="bg-blue-600 text-white px-4 py-2.5 rounded-xl font-bold text-sm shadow-sm hover:bg-blue-700">
-                Owner HQ Console
-              </button>
-            )}
             <button onClick={() => setView('kds')} className="bg-yellow-400 text-yellow-900 px-4 py-2.5 rounded-xl font-bold text-sm shadow-sm hover:bg-yellow-500">Kitchen Display</button>
             <button onClick={() => setView('admin')} className="bg-slate-200 px-4 py-2.5 rounded-xl font-bold text-sm hover:bg-slate-300">Manager Mode</button>
           </div>
