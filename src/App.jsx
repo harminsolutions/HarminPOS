@@ -53,11 +53,10 @@ export default function App() {
       .eq('user_id', userId)
       .single()
 
-    // If no tenant exists for this user yet, create a default one automatically
     if (error || !data) {
       const { data: newTenant, error: createError } = await supabase
         .from('tenants')
-        .insert([{ name: 'My New Branch', user_id: userId }])
+        .insert([{ name: 'My Luxury Branch', user_id: userId }])
         .select()
         .single()
       
@@ -80,7 +79,6 @@ export default function App() {
     else setProducts(data || [])
   }
 
-  // Kitchen orders polling when KDS is active
   useEffect(() => {
     let interval;
     if (view === 'kds' && tenant) {
@@ -108,7 +106,7 @@ export default function App() {
     if (isSignUp) {
       const { error } = await supabase.auth.signUp({ email, password })
       if (error) alert(error.message)
-      else alert("Check your email for the confirmation link, or log in if confirmation is disabled.")
+      else alert("Check your email for confirmation or sign in.")
     } else {
       const { error } = await supabase.auth.signInWithPassword({ email, password })
       if (error) alert(error.message)
@@ -224,31 +222,61 @@ export default function App() {
     fetchKitchenOrders(tenant.id)
   }
 
-  // --- VIEW: LOGIN / AUTH SCREEN ---
+  // --- LUXURY LOGIN SCREEN ---
   if (!session) {
     return (
-      <div className="flex h-screen bg-slate-900 items-center justify-center p-6 font-sans">
-        <div className="bg-white w-full max-w-md p-8 rounded-2xl shadow-2xl">
+      <div className="flex h-screen bg-slate-950 font-sans text-slate-100 items-center justify-center p-6 relative overflow-hidden">
+        {/* Background ambient lighting */}
+        <div className="absolute -top-40 -left-40 w-96 h-96 bg-blue-900/20 rounded-full blur-3xl pointer-events-none"></div>
+        <div className="absolute -bottom-40 -right-40 w-96 h-96 bg-indigo-900/20 rounded-full blur-3xl pointer-events-none"></div>
+
+        <div className="w-full max-w-md bg-slate-900/80 backdrop-blur-xl border border-slate-800 p-10 rounded-3xl shadow-2xl relative z-10">
           <div className="text-center mb-8">
-            <h1 className="text-3xl font-black text-slate-900">HarminPOS</h1>
-            <p className="text-sm text-slate-500 mt-1">Multi-Tenant Cloud POS SaaS</p>
+            <div className="inline-block px-3 py-1 bg-slate-800 border border-slate-700 rounded-full text-xs font-semibold tracking-widest text-slate-400 uppercase mb-3">
+              Enterprise POS
+            </div>
+            <h1 className="text-3xl font-black tracking-tight text-white">HarminPOS</h1>
+            <p className="text-sm text-slate-400 mt-1">Sign in to your merchant terminal</p>
           </div>
-          <form onSubmit={handleAuth} className="space-y-4">
+
+          <form onSubmit={handleAuth} className="space-y-5">
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Email Address</label>
-              <input required type="email" value={email} onChange={e => setEmail(e.target.value)} className="w-full p-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-slate-900 outline-none" placeholder="owner@store.com" />
+              <label className="block text-xs font-bold text-slate-400 tracking-wider uppercase mb-2">Corporate Email</label>
+              <input 
+                required 
+                type="email" 
+                value={email} 
+                onChange={e => setEmail(e.target.value)} 
+                className="w-full px-4 py-3 bg-slate-950/50 border border-slate-800 rounded-xl focus:ring-2 focus:ring-slate-400 focus:border-transparent outline-none transition text-sm text-white placeholder-slate-600" 
+                placeholder="name@company.com" 
+              />
             </div>
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Password</label>
-              <input required type="password" value={password} onChange={e => setPassword(e.target.value)} className="w-full p-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-slate-900 outline-none" placeholder="••••••••" />
+              <label className="block text-xs font-bold text-slate-400 tracking-wider uppercase mb-2">Password</label>
+              <input 
+                required 
+                type="password" 
+                value={password} 
+                onChange={e => setPassword(e.target.value)} 
+                className="w-full px-4 py-3 bg-slate-950/50 border border-slate-800 rounded-xl focus:ring-2 focus:ring-slate-400 focus:border-transparent outline-none transition text-sm text-white placeholder-slate-600" 
+                placeholder="••••••••••••" 
+              />
             </div>
-            <button disabled={isProcessing} type="submit" className="w-full bg-slate-900 text-white font-bold py-3.5 rounded-xl hover:bg-slate-800 transition">
-              {isProcessing ? 'Please wait...' : (isSignUp ? 'Create Account' : 'Sign In')}
+            <button 
+              disabled={isProcessing} 
+              type="submit" 
+              className="w-full bg-white text-slate-950 font-bold py-3.5 rounded-xl hover:bg-slate-200 active:scale-[0.99] transition shadow-lg text-sm tracking-wide mt-2"
+            >
+              {isProcessing ? 'Authenticating...' : (isSignUp ? 'Create Account' : 'Access Terminal')}
             </button>
           </form>
-          <div className="text-center mt-6">
-            <button onClick={() => setIsSignUp(!isSignUp)} className="text-sm text-blue-600 font-semibold hover:underline">
-              {isSignUp ? 'Already have an account? Sign In' : "Don't have an account? Create one"}
+
+          <div className="text-center mt-6 pt-6 border-t border-slate-800/80">
+            <button 
+              onClick={() => setIsSignUp(!isSignUp)} 
+              className="text-xs text-slate-400 hover:text-white transition font-medium"
+            >
+              {isSignUp ? 'Already registered? Sign in here' : "Need a merchant account? Register workspace"}
             </button>
           </div>
         </div>
@@ -257,7 +285,14 @@ export default function App() {
   }
 
   if (loadingTenant || !tenant) {
-    return <div className="flex h-screen bg-slate-900 text-white items-center justify-center font-sans">Loading tenant profile...</div>
+    return (
+      <div className="flex h-screen bg-slate-950 text-white items-center justify-center font-sans">
+        <div className="flex items-center gap-3">
+          <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+          <span className="text-sm font-medium tracking-wide text-slate-400">Loading secure terminal session...</span>
+        </div>
+      </div>
+    )
   }
 
   // --- VIEW: KITCHEN DISPLAY (KDS) ---
