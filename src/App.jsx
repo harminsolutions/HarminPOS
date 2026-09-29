@@ -5,13 +5,14 @@ export default function App() {
   const [session, setSession] = useState(null)
   const [tenant, setTenant] = useState(null)
   const [loadingTenant, setLoadingTenant] = useState(false)
+  const [isOwner, setIsOwner] = useState(false)
   
   // Auth Form State
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [isSignUp, setIsSignUp] = useState(false)
 
-  // App Views: 'pos', 'receipt', 'admin', 'kds'
+  // App Views: 'pos', 'receipt', 'admin', 'kds', 'owner'
   const [view, setView] = useState('pos')
   const [cart, setCart] = useState([])
   const [products, setProducts] = useState([])
@@ -23,30 +24,54 @@ export default function App() {
   // Admin & KDS State
   const [newProduct, setNewProduct] = useState({ name: '', price: '', category: 'Beverages' })
   const [kitchenOrders, setKitchenOrders] = useState([])
+  
+  // Owner Platform State
+  const [allTenants, setAllTenants] = useState([])
+  const [platformSales, setPlatformSales] = useState([])
+
+  const OWNER_EMAIL = 'harminsolutions96@gmail.com'
 
   // 1. Check Auth Session on Load
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
-      if (session) fetchTenantData(session.user.id)
+      if (session) {
+        checkIfOwner(session.user.email)
+        fetchTenantData(session.user.id, session.user.email)
+      }
     })
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session)
       if (session) {
-        fetchTenantData(session.user.id)
+        checkIfOwner(session.user.email)
+        fetchTenantData(session.user.id, session.user.email)
       } else {
         setTenant(null)
         setProducts([])
+        setIsOwner(false)
       }
     })
 
     return () => subscription.unsubscribe()
   }, [])
 
-  // 2. Fetch Tenant tied to the logged-in user
-  const fetchTenantData = async (userId) => {
+  const checkIfOwner = (userEmail) => {
+    if (userEmail === OWNER_EMAIL) {
+      setIsOwner(true)
+    } else {
+      setIsOwner(false)
+    }
+  }
+
+  const fetchTenantData = async (userId, userEmail) => {
     setLoadingTenant(true)
+    
+    // If owner, fetch global platform overview data
+    if (userEmail === OWNER_EMAIL) {
+      fetchPlatformOverview()
+    }
+
     let { data, error } = await supabase
       .from('tenants')
       .select('*')
@@ -56,7 +81,7 @@ export default function App() {
     if (error || !data) {
       const { data: newTenant, error: createError } = await supabase
         .from('tenants')
-        .insert([{ name: 'My Luxury Branch', user_id: userId }])
+        .insert([{ name: userEmail === OWNER_EMAIL ? 'Harmin Solutions HQ' : 'Merchant Branch', user_id: userId }])
         .select()
         .single()
       
@@ -66,6 +91,13 @@ export default function App() {
     setTenant(data)
     setLoadingTenant(false)
     if (data) fetchProducts(data.id)
+  }
+
+  const fetchPlatformOverview = async () => {
+    const { data: tenantsData } = await supabase.from('tenants').select('*')
+    const { data: salesData } = await supabase.from('sales').select('*, tenants(name)')
+    setAllTenants(tenantsData || [])
+    setPlatformSales(salesData || [])
   }
 
   const fetchProducts = async (tenantId) => {
@@ -118,6 +150,7 @@ export default function App() {
     await supabase.auth.signOut()
     setSession(null)
     setTenant(null)
+    setIsOwner(false)
   }
 
   const addToCart = (product) => {
@@ -226,7 +259,6 @@ export default function App() {
   if (!session) {
     return (
       <div className="flex h-screen bg-slate-950 font-sans text-slate-100 items-center justify-center p-6 relative overflow-hidden">
-        {/* Background ambient lighting */}
         <div className="absolute -top-40 -left-40 w-96 h-96 bg-blue-900/20 rounded-full blur-3xl pointer-events-none"></div>
         <div className="absolute -bottom-40 -right-40 w-96 h-96 bg-indigo-900/20 rounded-full blur-3xl pointer-events-none"></div>
 
@@ -236,7 +268,7 @@ export default function App() {
               Enterprise POS
             </div>
             <h1 className="text-3xl font-black tracking-tight text-white">HarminPOS</h1>
-            <p className="text-sm text-slate-400 mt-1">Sign in to your merchant terminal</p>
+            <p className="text-sm text-slate-400 mt-1">Sign in to your merchant or owner portal</p>
           </div>
 
           <form onSubmit={handleAuth} className="space-y-5">
@@ -247,7 +279,7 @@ export default function App() {
                 type="email" 
                 value={email} 
                 onChange={e => setEmail(e.target.value)} 
-                className="w-full px-4 py-3 bg-slate-950/50 border border-slate-800 rounded-xl focus:ring-2 focus:ring-slate-400 focus:border-transparent outline-none transition text-sm text-white placeholder-slate-600" 
+                className="w-full px-4 py-3 bg-slate-950/50 border border-slate-800 rounded-xl focus:ring-2 focus:ring-slate-400 outline-none transition text-sm text-white placeholder-slate-600" 
                 placeholder="name@company.com" 
               />
             </div>
@@ -258,7 +290,7 @@ export default function App() {
                 type="password" 
                 value={password} 
                 onChange={e => setPassword(e.target.value)} 
-                className="w-full px-4 py-3 bg-slate-950/50 border border-slate-800 rounded-xl focus:ring-2 focus:ring-slate-400 focus:border-transparent outline-none transition text-sm text-white placeholder-slate-600" 
+                className="w-full px-4 py-3 bg-slate-950/50 border border-slate-800 rounded-xl focus:ring-2 focus:ring-slate-400 outline-none transition text-sm text-white placeholder-slate-600" 
                 placeholder="••••••••••••" 
               />
             </div>
@@ -267,7 +299,7 @@ export default function App() {
               type="submit" 
               className="w-full bg-white text-slate-950 font-bold py-3.5 rounded-xl hover:bg-slate-200 active:scale-[0.99] transition shadow-lg text-sm tracking-wide mt-2"
             >
-              {isProcessing ? 'Authenticating...' : (isSignUp ? 'Create Account' : 'Access Terminal')}
+              {isProcessing ? 'Authenticating...' : (isSignUp ? 'Create Account' : 'Access Portal')}
             </button>
           </form>
 
@@ -289,7 +321,84 @@ export default function App() {
       <div className="flex h-screen bg-slate-950 text-white items-center justify-center font-sans">
         <div className="flex items-center gap-3">
           <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-          <span className="text-sm font-medium tracking-wide text-slate-400">Loading secure terminal session...</span>
+          <span className="text-sm font-medium tracking-wide text-slate-400">Loading secure session...</span>
+        </div>
+      </div>
+    )
+  }
+
+  // --- VIEW: OWNER SUPER ADMIN DASHBOARD ---
+  if (view === 'owner' && isOwner) {
+    const totalPlatformRevenue = platformSales.reduce((sum, s) => sum + s.total_amount, 0)
+
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 p-8 font-sans">
+        <div className="max-w-6xl mx-auto">
+          <div className="flex justify-between items-center mb-8 border-b border-slate-800 pb-6">
+            <div>
+              <span className="bg-blue-900/50 text-blue-400 border border-blue-700/50 text-xs px-3 py-1 rounded-full font-bold uppercase tracking-wider">Software Owner Console</span>
+              <h1 className="text-3xl font-black tracking-tight text-white mt-2">HarminSolutions Global HQ</h1>
+            </div>
+            <div className="flex gap-4">
+              <button onClick={() => setView('pos')} className="bg-slate-800 hover:bg-slate-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm transition">
+                Switch to POS Register
+              </button>
+              <button onClick={handleLogout} className="bg-red-600/20 text-red-400 border border-red-500/30 px-4 py-2.5 rounded-xl font-bold text-sm hover:bg-red-600/30 transition">
+                Sign Out
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-6 mb-8">
+            <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-lg">
+              <p className="text-xs text-slate-400 uppercase font-bold tracking-wider">Active Tenants / Stores</p>
+              <p className="text-4xl font-black text-white mt-2">{allTenants.length}</p>
+            </div>
+            <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-lg">
+              <p className="text-xs text-slate-400 uppercase font-bold tracking-wider">Total Platform Sales</p>
+              <p className="text-4xl font-black text-white mt-2">{platformSales.length} orders</p>
+            </div>
+            <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-lg">
+              <p className="text-xs text-slate-400 uppercase font-bold tracking-wider">Gross Platform Revenue</p>
+              <p className="text-4xl font-black text-emerald-400 mt-2">RM {totalPlatformRevenue.toFixed(2)}</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-8">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-lg">
+              <h2 className="text-xl font-bold mb-4 text-white">Registered Tenants</h2>
+              <div className="space-y-3">
+                {allTenants.map(t => (
+                  <div key={t.id} className="flex justify-between items-center bg-slate-950/60 p-4 rounded-xl border border-slate-800/80">
+                    <div>
+                      <p className="font-bold text-white">{t.name}</p>
+                      <p className="text-xs text-slate-500 font-mono mt-0.5">ID: {t.id}</p>
+                    </div>
+                    <span className="text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2.5 py-1 rounded-full font-semibold">Active</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-lg">
+              <h2 className="text-xl font-bold mb-4 text-white">Global Sales Audit Trail</h2>
+              <div className="space-y-3 max-h-[300px] overflow-y-auto pr-1">
+                {platformSales.length === 0 ? (
+                  <p className="text-slate-500 text-sm">No transactions recorded across the platform yet.</p>
+                ) : (
+                  platformSales.map(s => (
+                    <div key={s.id} className="flex justify-between items-center bg-slate-950/60 p-3.5 rounded-xl border border-slate-800/80 text-sm">
+                      <div>
+                        <p className="font-bold text-white">RM {s.total_amount.toFixed(2)}</p>
+                        <p className="text-xs text-slate-400">{s.tenants?.name || 'Store'} · {new Date(s.created_at).toLocaleTimeString()}</p>
+                      </div>
+                      <span className="text-xs font-mono text-slate-500">{s.lhdn_buyer_tin ? 'B2B e-Invoice' : 'B2C Sale'}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     )
@@ -459,6 +568,11 @@ export default function App() {
             <p className="text-xs text-slate-500 font-medium">Store: {tenant.name} · <button onClick={handleLogout} className="text-blue-600 hover:underline">Sign Out</button></p>
           </div>
           <div className="flex gap-2">
+            {isOwner && (
+              <button onClick={() => setView('owner')} className="bg-blue-600 text-white px-4 py-2.5 rounded-xl font-bold text-sm shadow-sm hover:bg-blue-700">
+                Owner HQ Console
+              </button>
+            )}
             <button onClick={() => setView('kds')} className="bg-yellow-400 text-yellow-900 px-4 py-2.5 rounded-xl font-bold text-sm shadow-sm hover:bg-yellow-500">Kitchen Display</button>
             <button onClick={() => setView('admin')} className="bg-slate-200 px-4 py-2.5 rounded-xl font-bold text-sm hover:bg-slate-300">Manager Mode</button>
           </div>
