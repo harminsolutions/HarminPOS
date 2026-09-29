@@ -75,7 +75,7 @@ export default function App() {
       supabase.from('products').select('*').eq('tenant_id', tenantId).order('created_at', { ascending: false }),
       supabase.from('sales').select('*').eq('tenant_id', tenantId).order('created_at', { ascending: false }),
       supabase.from('staff').select('*, roles(name, tier_level)').eq('tenant_id', tenantId).order('created_at', { ascending: false }),
-      supabase.from('roles').select('*').gte('tier_level', 3).order('tier_level', { ascending: true }) // Only fetch assignable roles
+      supabase.from('roles').select('*').gte('tier_level', 3).order('tier_level', { ascending: true })
     ])
     
     if (prodRes.data) setProducts(prodRes.data)
