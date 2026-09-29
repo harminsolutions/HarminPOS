@@ -31,7 +31,11 @@ export default function App() {
   const [products, setProducts] = useState([])
   const [salesData, setSalesData] = useState([])
   const [staffList, setStaffList] = useState([])
-  const [roles, setRoles] = useState([])
+  const [roles, setRoles] = useState([
+    { id: 'fallback-3', name: 'Floor Supervisor', tier_level: 3 },
+    { id: 'fallback-4', name: 'Client Advisor', tier_level: 4 },
+    { id: 'fallback-5', name: 'Inventory Specialist', tier_level: 5 }
+  ])
   const [newProduct, setNewProduct] = useState({ name: '', price: '', cost_price: '', image_url: '', category: 'Retail' })
   const [newStaff, setNewStaff] = useState({ full_name: '', pin_code: '', role_id: '' })
 
@@ -83,11 +87,11 @@ export default function App() {
     if (prodRes.data) setProducts(prodRes.data)
     if (salesRes.data) setSalesData(salesRes.data)
     if (staffRes.data) setStaffList(staffRes.data)
-    if (rolesRes.data) {
+    if (rolesRes.data && rolesRes.data.length > 0) {
       setRoles(rolesRes.data)
-      if (rolesRes.data.length > 0 && !newStaff.role_id) {
-        setNewStaff(prev => ({ ...prev, role_id: rolesRes.data[0].id }))
-      }
+      setNewStaff(prev => ({ ...prev, role_id: prev.role_id || rolesRes.data[0].id }))
+    } else {
+      setNewStaff(prev => ({ ...prev, role_id: prev.role_id || 'fallback-4' }))
     }
   }
 
@@ -95,7 +99,6 @@ export default function App() {
   const handleTier1And2Auth = async (user) => {
     setLoading(true)
     
-    // TIER 1
     if (user.email === SYSTEM_ADMIN_EMAIL) {
       await fetchPlatformOverview()
       setActiveStaff({ role: { name: 'System Admin', tier_level: 1 }, permissions: { can_void_line_item: true } })
@@ -103,7 +106,6 @@ export default function App() {
       return
     }
 
-    // TIER 2
     let { data: tenantData } = await supabase.from('tenants').select('*').eq('user_id', user.id).maybeSingle()
     
     if (!tenantData) {
@@ -156,8 +158,6 @@ export default function App() {
     e.preventDefault()
     setIsProcessing(true)
     
-    // Note: In production Supabase, admin user creation typically requires service_role key. 
-    // Here we register via client auth sign up or direct tenants insert.
     const { data: authData, error: authError } = await supabase.auth.signUp({
       email: newMerchant.email,
       password: newMerchant.password
@@ -175,7 +175,7 @@ export default function App() {
         business_name: newMerchant.business_name,
         user_id: userId,
         industry: newMerchant.industry,
-        is_approved: true // Auto-approved when created by Tier 1
+        is_approved: true
       }])
     }
 
@@ -208,9 +208,21 @@ export default function App() {
   const handleAddStaff = async (e) => {
     e.preventDefault()
     setIsProcessing(true)
+    
+    // If using fallback ID because roles table query was empty, handle gracefully or insert real id
+    let targetRoleId = newStaff.role_id;
+    if (targetRoleId.startsWith('fallback-')) {
+      const actualRole = roles.find(r => r.id === targetRoleId) || roles[0];
+      targetRoleId = actualRole?.id;
+    }
+
     const { error } = await supabase.from('staff').insert([{
-      tenant_id: tenant.id, full_name: newStaff.full_name, pin_code: newStaff.pin_code, role_id: newStaff.role_id
+      tenant_id: tenant.id, 
+      full_name: newStaff.full_name, 
+      pin_code: newStaff.pin_code, 
+      role_id: targetRoleId
     }])
+    
     if (error) alert(error.message)
     else {
       setNewStaff({ full_name: '', pin_code: '', role_id: roles[0]?.id || '' })
@@ -401,14 +413,24 @@ export default function App() {
                   <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm mb-8">
                     <h3 className="font-bold mb-5 text-lg">Provision New Terminal Access</h3>
                     <form onSubmit={handleAddStaff} className="grid grid-cols-4 gap-4 items-end">
-                      <div className="col-span-1"><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Full Name</label><input required type="text" value={newStaff.full_name} onChange={e => setNewStaff({...newStaff, full_name: e.target.value})} className="w-full p-3 border border-slate-300 rounded-xl text-sm outline-none focus:border-slate-500" /></div>
-                      <div className="col-span-1"><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Access PIN (6-Digit)</label><input required type="password" maxLength="6" value={newStaff.pin_code} onChange={e => setNewStaff({...newStaff, pin_code: e.target.value})} className="w-full p-3 border border-slate-300 rounded-xl text-sm outline-none focus:border-slate-500 font-mono tracking-widest" /></div>
-                      <div className="col-span-1"><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Security Role</label>
-                        <select required value={newStaff.role_id} onChange={e => setNewStaff({...newStaff, role_id: e.target.value})} className="w-full p-3 border border-slate-300 rounded-xl text-sm outline-none bg-white">
-                          {roles.map(r => <option key={r.id} value={r.id}>Tier {r.tier_level}: {r.name}</option>)}
+                      <div className="col-span-1"><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Full Name</label><input required type="text" value={newStaff.full_name} onChange={e => setNewStaff({...newStaff, full_name: e.target.value})} className="w-full p-3 border border-slate-300 rounded-xl text-sm outline-none focus:border-slate-500 bg-white text-slate-900" /></div>
+                      <div className="col-span-1"><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Access PIN (6-Digit)</label><input required type="password" maxLength="6" value={newStaff.pin_code} onChange={e => setNewStaff({...newStaff, pin_code: e.target.value})} className="w-full p-3 border border-slate-300 rounded-xl text-sm outline-none focus:border-slate-500 font-mono tracking-widest bg-white text-slate-900" /></div>
+                      <div className="col-span-1">
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Security Role</label>
+                        <select 
+                          required 
+                          value={newStaff.role_id} 
+                          onChange={e => setNewStaff({...newStaff, role_id: e.target.value})} 
+                          className="w-full p-3 border border-slate-300 rounded-xl text-sm outline-none bg-white text-slate-900 cursor-pointer"
+                        >
+                          {roles.map(r => (
+                            <option key={r.id} value={r.id}>
+                              Tier {r.tier_level}: {r.name}
+                            </option>
+                          ))}
                         </select>
                       </div>
-                      <div className="col-span-1"><button disabled={isProcessing || !tenant?.is_approved} type="submit" className="w-full bg-slate-900 text-white font-bold py-3 rounded-xl hover:bg-slate-800 text-sm disabled:bg-slate-400">Generate Access</button></div>
+                      <div className="col-span-1"><button disabled={isProcessing || !tenant?.is_approved} type="submit" className="w-full bg-slate-900 text-white font-bold py-3 rounded-xl hover:bg-slate-800 text-sm disabled:bg-slate-400 cursor-pointer">Generate Access</button></div>
                     </form>
                   </div>
 
@@ -419,9 +441,9 @@ export default function App() {
                         {staffList.length === 0 ? <tr><td colSpan="4" className="p-6 text-center text-slate-500">No staff provisioned.</td></tr> : staffList.map(s => (
                           <tr key={s.id} className="border-b border-slate-100">
                             <td className="p-4 font-bold">{s.full_name}</td>
-                            <td className="p-4"><span className="bg-blue-50 text-blue-700 px-2.5 py-1 rounded-md text-xs font-bold border border-blue-200">Tier {s.roles.tier_level}: {s.roles.name}</span></td>
+                            <td className="p-4"><span className="bg-blue-50 text-blue-700 px-2.5 py-1 rounded-md text-xs font-bold border border-blue-200">Tier {s.roles?.tier_level || 4}: {s.roles?.name || 'Staff'}</span></td>
                             <td className="p-4">{s.is_active ? <span className="text-emerald-600 font-bold text-xs">Active</span> : <span className="text-red-500 font-bold text-xs">Revoked</span>}</td>
-                            <td className="p-4 text-right"><button onClick={() => toggleStaffStatus(s.id, s.is_active)} className="text-slate-600 hover:text-slate-900 font-bold text-xs border border-slate-300 px-3 py-1.5 rounded-lg">{s.is_active ? 'Revoke Access' : 'Restore Access'}</button></td>
+                            <td className="p-4 text-right"><button onClick={() => toggleStaffStatus(s.id, s.is_active)} className="text-slate-600 hover:text-slate-900 font-bold text-xs border border-slate-300 px-3 py-1.5 rounded-lg cursor-pointer">{s.is_active ? 'Revoke Access' : 'Restore Access'}</button></td>
                           </tr>
                         ))}
                       </tbody>
@@ -436,10 +458,10 @@ export default function App() {
                   <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm mb-8 relative overflow-hidden">
                     <h3 className="font-bold mb-5 text-lg">Register New Product</h3>
                     <form onSubmit={handleAddProduct} className="grid grid-cols-4 gap-4 items-end">
-                      <div className="col-span-2"><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Product Name</label><input required type="text" value={newProduct.name} onChange={e => setNewProduct({...newProduct, name: e.target.value})} className="w-full p-3 border border-slate-300 rounded-xl text-sm outline-none" /></div>
+                      <div className="col-span-2"><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Product Name</label><input required type="text" value={newProduct.name} onChange={e => setNewProduct({...newProduct, name: e.target.value})} className="w-full p-3 border border-slate-300 rounded-xl text-sm outline-none bg-white text-slate-900" /></div>
                       <div>
                         <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Category</label>
-                        <select value={newProduct.category} onChange={e => setNewProduct({...newProduct, category: e.target.value})} className="w-full p-3 border border-slate-300 rounded-xl text-sm bg-white">
+                        <select value={newProduct.category} onChange={e => setNewProduct({...newProduct, category: e.target.value})} className="w-full p-3 border border-slate-300 rounded-xl text-sm bg-white text-slate-900 cursor-pointer">
                           {storeIndustry === 'F&B / Hospitality' ? (
                             <><option>Beverages</option><option>Meals</option><option>Pastries</option></>
                           ) : storeIndustry === 'Luxury / Jewelry' ? (
@@ -449,10 +471,10 @@ export default function App() {
                           )}
                         </select>
                       </div>
-                      <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Image URL</label><input type="text" value={newProduct.image_url} onChange={e => setNewProduct({...newProduct, image_url: e.target.value})} className="w-full p-3 border border-slate-300 rounded-xl text-sm outline-none" /></div>
-                      <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Cost Price (RM)</label><input required type="number" step="0.01" value={newProduct.cost_price} onChange={e => setNewProduct({...newProduct, cost_price: e.target.value})} className="w-full p-3 border border-slate-300 rounded-xl text-sm outline-none" /></div>
-                      <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Selling Price (RM)</label><input required type="number" step="0.01" value={newProduct.price} onChange={e => setNewProduct({...newProduct, price: e.target.value})} className="w-full p-3 border border-slate-300 rounded-xl text-sm outline-none" /></div>
-                      <div className="col-span-2"><button disabled={isProcessing || !tenant?.is_approved} type="submit" className="w-full bg-slate-900 text-white font-bold py-3 rounded-xl hover:bg-slate-800 text-sm disabled:bg-slate-400">Save to Register</button></div>
+                      <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Image URL</label><input type="text" value={newProduct.image_url} onChange={e => setNewProduct({...newProduct, image_url: e.target.value})} className="w-full p-3 border border-slate-300 rounded-xl text-sm outline-none bg-white text-slate-900" /></div>
+                      <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Cost Price (RM)</label><input required type="number" step="0.01" value={newProduct.cost_price} onChange={e => setNewProduct({...newProduct, cost_price: e.target.value})} className="w-full p-3 border border-slate-300 rounded-xl text-sm outline-none bg-white text-slate-900" /></div>
+                      <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Selling Price (RM)</label><input required type="number" step="0.01" value={newProduct.price} onChange={e => setNewProduct({...newProduct, price: e.target.value})} className="w-full p-3 border border-slate-300 rounded-xl text-sm outline-none bg-white text-slate-900" /></div>
+                      <div className="col-span-2"><button disabled={isProcessing || !tenant?.is_approved} type="submit" className="w-full bg-slate-900 text-white font-bold py-3 rounded-xl hover:bg-slate-800 text-sm disabled:bg-slate-400 cursor-pointer">Save to Register</button></div>
                     </form>
                   </div>
                   <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
@@ -465,7 +487,7 @@ export default function App() {
                             <td className="p-4 text-slate-500">{p.category}</td>
                             <td className="p-4 text-slate-500">RM {(p.cost_price || 0).toFixed(2)}</td>
                             <td className="p-4 font-bold text-blue-600">RM {p.price.toFixed(2)}</td>
-                            <td className="p-4 text-right"><button onClick={() => deleteProduct(p.id)} className="text-red-500 hover:text-red-700 font-bold text-xs">Delete</button></td>
+                            <td className="p-4 text-right"><button onClick={() => deleteProduct(p.id)} className="text-red-500 hover:text-red-700 font-bold text-xs cursor-pointer">Delete</button></td>
                           </tr>
                         ))}
                       </tbody>
@@ -480,7 +502,7 @@ export default function App() {
                   {isReportDay ? (
                     <div className="bg-emerald-50 border border-emerald-200 p-8 rounded-2xl shadow-sm">
                       <h3 className="text-emerald-900 font-black text-xl mb-2">Reports are ready for download!</h3>
-                      <button onClick={downloadCSV} className="bg-emerald-600 text-white px-6 py-3 rounded-xl font-bold shadow-lg hover:bg-emerald-700 transition">Download Excel / CSV</button>
+                      <button onClick={downloadCSV} className="bg-emerald-600 text-white px-6 py-3 rounded-xl font-bold shadow-lg hover:bg-emerald-700 transition cursor-pointer">Download Excel / CSV</button>
                     </div>
                   ) : (
                     <div className="bg-white border border-slate-200 p-10 rounded-2xl shadow-sm text-center">
