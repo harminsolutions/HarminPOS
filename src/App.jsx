@@ -24,6 +24,8 @@ export default function App() {
   // Tier 1 (System Admin) State
   const [allTenants, setAllTenants] = useState([])
   const [platformSales, setPlatformSales] = useState([])
+  const [showCreateModal, setShowCreateModal] = useState(false)
+  const [newMerchant, setNewMerchant] = useState({ email: '', password: '', business_name: '', industry: 'Retail' })
   
   // Tier 2 (Boutique Manager) State
   const [products, setProducts] = useState([])
@@ -83,7 +85,9 @@ export default function App() {
     if (staffRes.data) setStaffList(staffRes.data)
     if (rolesRes.data) {
       setRoles(rolesRes.data)
-      if (rolesRes.data.length > 0) setNewStaff(prev => ({ ...prev, role_id: rolesRes.data[0].id }))
+      if (rolesRes.data.length > 0 && !newStaff.role_id) {
+        setNewStaff(prev => ({ ...prev, role_id: rolesRes.data[0].id }))
+      }
     }
   }
 
@@ -103,7 +107,7 @@ export default function App() {
     let { data: tenantData } = await supabase.from('tenants').select('*').eq('user_id', user.id).maybeSingle()
     
     if (!tenantData) {
-      const { data: newTenant } = await supabase.from('tenants').insert([{ business_name: 'New Boutique', user_id: user.id }]).select().single()
+      const { data: newTenant } = await supabase.from('tenants').insert([{ business_name: 'New Boutique', user_id: user.id, industry: 'Retail' }]).select().single()
       tenantData = newTenant
     }
     
@@ -148,6 +152,40 @@ export default function App() {
     fetchPlatformOverview()
   }
 
+  const handleCreateMerchant = async (e) => {
+    e.preventDefault()
+    setIsProcessing(true)
+    
+    // Note: In production Supabase, admin user creation typically requires service_role key. 
+    // Here we register via client auth sign up or direct tenants insert.
+    const { data: authData, error: authError } = await supabase.auth.signUp({
+      email: newMerchant.email,
+      password: newMerchant.password
+    })
+
+    if (authError) {
+      alert("Error creating user: " + authError.message)
+      setIsProcessing(false)
+      return
+    }
+
+    const userId = authData.user?.id
+    if (userId) {
+      await supabase.from('tenants').insert([{
+        business_name: newMerchant.business_name,
+        user_id: userId,
+        industry: newMerchant.industry,
+        is_approved: true // Auto-approved when created by Tier 1
+      }])
+    }
+
+    alert("Merchant successfully provisioned!")
+    setNewMerchant({ email: '', password: '', business_name: '', industry: 'Retail' })
+    setShowCreateModal(false)
+    fetchPlatformOverview()
+    setIsProcessing(false)
+  }
+
   // --- 5. TIER 2 ACTIONS ---
   const handleAddProduct = async (e) => {
     e.preventDefault()
@@ -155,7 +193,7 @@ export default function App() {
     await supabase.from('products').insert([{ 
       tenant_id: tenant.id, name: newProduct.name, price: parseFloat(newProduct.price), cost_price: parseFloat(newProduct.cost_price || 0), image_url: newProduct.image_url, category: newProduct.category 
     }])
-    setNewProduct({ name: '', price: '', cost_price: '', image_url: '', category: 'Retail' })
+    setNewProduct({ name: '', price: '', cost_price: '', image_url: '', category: tenant?.industry === 'F&B / Hospitality' ? 'Beverages' : 'Retail' })
     fetchTenantData(tenant.id)
     setIsProcessing(false)
   }
@@ -241,6 +279,7 @@ export default function App() {
   }
 
   const currentTier = activeStaff.role.tier_level;
+  const storeIndustry = tenant?.industry || 'Retail';
 
   return (
     <div className="min-h-screen bg-[#f8fafc] font-sans text-slate-900 flex flex-col">
@@ -253,16 +292,48 @@ export default function App() {
         <button onClick={handleLogout} className="text-xs font-bold text-red-400 hover:text-white border border-red-900 hover:bg-red-500/20 px-4 py-1.5 rounded transition">Secure Logout</button>
       </div>
 
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden relative">
         
         {/* TIER 1: SYSTEM ADMIN */}
         {currentTier === 1 && (
           <div className="flex-1 overflow-y-auto bg-slate-950 text-slate-100 p-8">
             <div className="max-w-7xl mx-auto">
-              <div className="mb-10 border-b border-slate-800 pb-6">
-                <p className="text-blue-400 font-bold text-xs tracking-widest uppercase mb-1">HarminSolutions Administrator</p>
-                <h1 className="text-3xl font-black tracking-tight">Global HQ Console</h1>
+              <div className="flex justify-between items-center mb-10 border-b border-slate-800 pb-6">
+                <div>
+                  <p className="text-blue-400 font-bold text-xs tracking-widest uppercase mb-1">HarminSolutions Administrator</p>
+                  <h1 className="text-3xl font-black tracking-tight">Global HQ Console</h1>
+                </div>
+                <button onClick={() => setShowCreateModal(true)} className="bg-blue-600 text-white px-5 py-2.5 rounded-xl font-bold text-sm hover:bg-blue-500 transition shadow-lg">
+                  + Provision New Merchant
+                </button>
               </div>
+
+              {/* Create Merchant Modal */}
+              {showCreateModal && (
+                <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                  <div className="bg-slate-900 border border-slate-800 p-8 rounded-2xl w-full max-w-md shadow-2xl">
+                    <h2 className="text-xl font-black mb-4 text-white">Provision Merchant Account</h2>
+                    <form onSubmit={handleCreateMerchant} className="space-y-4">
+                      <div><label className="block text-xs font-bold text-slate-400 uppercase mb-1">Business Name</label><input required type="text" value={newMerchant.business_name} onChange={e => setNewMerchant({...newMerchant, business_name: e.target.value})} className="w-full p-3 bg-slate-950 border border-slate-700 rounded-xl text-white outline-none text-sm" placeholder="e.g. Pavilion Luxury Suites" /></div>
+                      <div><label className="block text-xs font-bold text-slate-400 uppercase mb-1">Owner Email</label><input required type="email" value={newMerchant.email} onChange={e => setNewMerchant({...newMerchant, email: e.target.value})} className="w-full p-3 bg-slate-950 border border-slate-700 rounded-xl text-white outline-none text-sm" placeholder="owner@store.com" /></div>
+                      <div><label className="block text-xs font-bold text-slate-400 uppercase mb-1">Temporary Password</label><input required type="password" value={newMerchant.password} onChange={e => setNewMerchant({...newMerchant, password: e.target.value})} className="w-full p-3 bg-slate-950 border border-slate-700 rounded-xl text-white outline-none text-sm" placeholder="••••••••" /></div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Nature of Business (Industry)</label>
+                        <select value={newMerchant.industry} onChange={e => setNewMerchant({...newMerchant, industry: e.target.value})} className="w-full p-3 bg-slate-950 border border-slate-700 rounded-xl text-white outline-none text-sm">
+                          <option value="Retail">Retail & Apparel</option>
+                          <option value="F&B / Hospitality">F&B / Hospitality</option>
+                          <option value="Luxury / Jewelry">Luxury / Jewelry</option>
+                        </select>
+                      </div>
+                      <div className="flex gap-3 pt-4">
+                        <button type="button" onClick={() => setShowCreateModal(false)} className="flex-1 bg-slate-800 text-white font-bold py-3 rounded-xl hover:bg-slate-700 transition text-sm">Cancel</button>
+                        <button disabled={isProcessing} type="submit" className="flex-1 bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-500 transition text-sm">{isProcessing ? 'Creating...' : 'Create Merchant'}</button>
+                      </div>
+                    </form>
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-3 gap-6 mb-8">
                 <div className="bg-[#0f172a] border border-slate-800 p-6 rounded-2xl shadow-lg"><p className="text-xs text-slate-400 uppercase font-bold tracking-wider">Active Tenants</p><p className="text-4xl font-black text-white mt-2">{allTenants.length}</p></div>
                 <div className="bg-[#0f172a] border border-slate-800 p-6 rounded-2xl shadow-lg"><p className="text-xs text-slate-400 uppercase font-bold tracking-wider">Total Platform Sales</p><p className="text-4xl font-black text-white mt-2">{platformSales.length}</p></div>
@@ -274,7 +345,10 @@ export default function App() {
                   <div className="flex-1 space-y-3 overflow-y-auto pr-2">
                     {allTenants.length === 0 ? <p className="text-sm text-slate-500">No merchants registered.</p> : allTenants.map(t => (
                       <div key={t.id} className="flex justify-between items-center bg-slate-900 p-4 rounded-xl border border-slate-800">
-                        <div><p className="font-bold text-white text-lg">{t.business_name || 'Unnamed Store'}</p><p className="text-xs text-slate-400 font-mono mt-1">Code: <span className="text-blue-400">{t.store_code || 'PENDING'}</span></p></div>
+                        <div>
+                          <p className="font-bold text-white text-lg">{t.business_name || 'Unnamed Store'}</p>
+                          <p className="text-xs text-slate-400 font-mono mt-1">Code: <span className="text-blue-400">{t.store_code || 'PENDING'}</span> · Industry: <span className="text-emerald-400">{t.industry || 'Retail'}</span></p>
+                        </div>
                         <div>{t.is_approved ? <span className="text-xs px-3 py-1.5 rounded-lg font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Approved</span> : <button onClick={() => approveTenant(t.id)} className="text-xs px-4 py-2 rounded-lg font-bold bg-orange-600 text-white hover:bg-orange-500 transition">Approve</button>}</div>
                       </div>
                     ))}
@@ -291,6 +365,7 @@ export default function App() {
             <div className="w-64 bg-white border-r border-slate-200 flex flex-col shadow-sm">
               <div className="p-6 border-b border-slate-100 bg-slate-900 text-white">
                 <h2 className="font-black text-xl tracking-tight leading-tight">{tenant?.business_name}</h2>
+                <p className="text-[11px] text-emerald-400 font-bold uppercase tracking-wider mt-1">{storeIndustry} Profile</p>
                 <div className="mt-3"><span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Store Code:</span> <span className="text-xs bg-slate-800 px-2 py-1 rounded border border-slate-700 font-mono text-blue-400">{tenant?.store_code || 'PENDING'}</span></div>
               </div>
               <div className="flex-1 p-4 space-y-1">
@@ -303,15 +378,15 @@ export default function App() {
 
             <div className="flex-1 overflow-y-auto p-10 bg-slate-50 relative">
               {!tenant?.is_approved && (
-                <div className="bg-orange-100 border border-orange-300 text-orange-800 p-4 rounded-xl mb-8 font-medium text-sm flex justify-between items-center">
+                <div className="bg-orange-100 border border-orange-300 text-orange-800 p-4 rounded-xl mb-8 font-medium text-sm flex justify-between items-center shadow-sm">
                   <span>⚠️ Your merchant account is in <b>Pending Verification</b> mode.</span>
-                  <button className="bg-orange-800 text-white px-4 py-1.5 rounded-lg text-xs font-bold">Contact HQ</button>
+                  <button onClick={() => alert("HQ Contact Request Logged. Support team will review your account within 2 hours.")} className="bg-orange-800 text-white px-4 py-1.5 rounded-lg text-xs font-bold hover:bg-orange-900 transition cursor-pointer">Contact HQ</button>
                 </div>
               )}
 
               {activeTab === 'overview' && (
                 <div>
-                  <h1 className="text-3xl font-black mb-8 tracking-tight">Financial Overview</h1>
+                  <h1 className="text-3xl font-black mb-8 tracking-tight">Financial Overview ({storeIndustry})</h1>
                   <div className="grid grid-cols-3 gap-6">
                     <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm"><p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Total Gross Sales</p><p className="text-3xl font-black text-slate-900">RM {salesData.reduce((s, a) => s + a.total_amount, 0).toFixed(2)}</p></div>
                     <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm"><p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Total Net Profit</p><p className="text-3xl font-black text-emerald-600">RM {salesData.reduce((s, a) => s + (a.total_profit || 0), 0).toFixed(2)}</p></div>
@@ -357,12 +432,23 @@ export default function App() {
 
               {activeTab === 'inventory' && (
                 <div>
-                  <h1 className="text-3xl font-black mb-8 tracking-tight">Inventory Control</h1>
+                  <h1 className="text-3xl font-black mb-8 tracking-tight">Inventory Control ({storeIndustry})</h1>
                   <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm mb-8 relative overflow-hidden">
                     <h3 className="font-bold mb-5 text-lg">Register New Product</h3>
                     <form onSubmit={handleAddProduct} className="grid grid-cols-4 gap-4 items-end">
                       <div className="col-span-2"><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Product Name</label><input required type="text" value={newProduct.name} onChange={e => setNewProduct({...newProduct, name: e.target.value})} className="w-full p-3 border border-slate-300 rounded-xl text-sm outline-none" /></div>
-                      <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Category</label><select value={newProduct.category} onChange={e => setNewProduct({...newProduct, category: e.target.value})} className="w-full p-3 border border-slate-300 rounded-xl text-sm bg-white"><option>Retail</option><option>Beverages</option></select></div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Category</label>
+                        <select value={newProduct.category} onChange={e => setNewProduct({...newProduct, category: e.target.value})} className="w-full p-3 border border-slate-300 rounded-xl text-sm bg-white">
+                          {storeIndustry === 'F&B / Hospitality' ? (
+                            <><option>Beverages</option><option>Meals</option><option>Pastries</option></>
+                          ) : storeIndustry === 'Luxury / Jewelry' ? (
+                            <><option>Fine Jewelry</option><option>Timepieces</option><option>Accessories</option></>
+                          ) : (
+                            <><option>Retail</option><option>Apparel</option><option>Electronics</option></>
+                          )}
+                        </select>
+                      </div>
                       <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Image URL</label><input type="text" value={newProduct.image_url} onChange={e => setNewProduct({...newProduct, image_url: e.target.value})} className="w-full p-3 border border-slate-300 rounded-xl text-sm outline-none" /></div>
                       <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Cost Price (RM)</label><input required type="number" step="0.01" value={newProduct.cost_price} onChange={e => setNewProduct({...newProduct, cost_price: e.target.value})} className="w-full p-3 border border-slate-300 rounded-xl text-sm outline-none" /></div>
                       <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Selling Price (RM)</label><input required type="number" step="0.01" value={newProduct.price} onChange={e => setNewProduct({...newProduct, price: e.target.value})} className="w-full p-3 border border-slate-300 rounded-xl text-sm outline-none" /></div>
@@ -371,10 +457,16 @@ export default function App() {
                   </div>
                   <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
                     <table className="w-full text-left text-sm">
-                      <thead className="bg-slate-50 border-b border-slate-200"><tr className="text-slate-500"><th className="p-4 font-bold">Product</th><th className="p-4 font-bold">Cost</th><th className="p-4 font-bold">Price</th><th className="p-4 font-bold text-right">Action</th></tr></thead>
+                      <thead className="bg-slate-50 border-b border-slate-200"><tr className="text-slate-500"><th className="p-4 font-bold">Product</th><th className="p-4 font-bold">Category</th><th className="p-4 font-bold">Cost</th><th className="p-4 font-bold">Price</th><th className="p-4 font-bold text-right">Action</th></tr></thead>
                       <tbody>
-                        {products.length === 0 ? <tr><td colSpan="4" className="p-6 text-center text-slate-500">No products added.</td></tr> : products.map(p => (
-                          <tr key={p.id} className="border-b border-slate-100"><td className="p-4 font-medium flex items-center gap-3">{p.image_url ? <img src={p.image_url} alt="" className="w-8 h-8 rounded object-cover" /> : <div className="w-8 h-8 rounded bg-slate-200"></div>}{p.name}</td><td className="p-4 text-slate-500">RM {(p.cost_price || 0).toFixed(2)}</td><td className="p-4 font-bold text-blue-600">RM {p.price.toFixed(2)}</td><td className="p-4 text-right"><button onClick={() => deleteProduct(p.id)} className="text-red-500 hover:text-red-700 font-bold text-xs">Delete</button></td></tr>
+                        {products.length === 0 ? <tr><td colSpan="5" className="p-6 text-center text-slate-500">No products added.</td></tr> : products.map(p => (
+                          <tr key={p.id} className="border-b border-slate-100">
+                            <td className="p-4 font-medium flex items-center gap-3">{p.image_url ? <img src={p.image_url} alt="" className="w-8 h-8 rounded object-cover" /> : <div className="w-8 h-8 rounded bg-slate-200"></div>}{p.name}</td>
+                            <td className="p-4 text-slate-500">{p.category}</td>
+                            <td className="p-4 text-slate-500">RM {(p.cost_price || 0).toFixed(2)}</td>
+                            <td className="p-4 font-bold text-blue-600">RM {p.price.toFixed(2)}</td>
+                            <td className="p-4 text-right"><button onClick={() => deleteProduct(p.id)} className="text-red-500 hover:text-red-700 font-bold text-xs">Delete</button></td>
+                          </tr>
                         ))}
                       </tbody>
                     </table>
