@@ -5,11 +5,11 @@ export default function App() {
   // Global & Routing State
   const [session, setSession] = useState(null)
   const [tenant, setTenant] = useState(null)
-  const [activeStaff, setActiveStaff] = useState(null) // Holds the 5-Tier user data & permissions
+  const [activeStaff, setActiveStaff] = useState(null)
   const [loading, setLoading] = useState(true)
   
   // Gateways: 'management', 'terminal'
-  const [loginGateway, setLoginGateway] = useState('terminal')
+  const [loginGateway, setLoginGateway] = useState('management')
   
   // Auth Form State
   const [email, setEmail] = useState('')
@@ -17,6 +17,10 @@ export default function App() {
   const [storeCode, setStoreCode] = useState('')
   const [staffPin, setStaffPin] = useState('')
   const [isProcessing, setIsProcessing] = useState(false)
+
+  // System Admin (Tier 1) State
+  const [allTenants, setAllTenants] = useState([])
+  const [platformSales, setPlatformSales] = useState([])
   
   const SYSTEM_ADMIN_EMAIL = 'harminsolutions96@gmail.com'
 
@@ -33,7 +37,6 @@ export default function App() {
       if (session) {
         handleTier1And2Auth(session.user)
       } else if (!activeStaff) { 
-        // Only wipe state if not logged in via Terminal PIN
         setTenant(null)
         setActiveStaff(null)
         setLoading(false)
@@ -42,12 +45,27 @@ export default function App() {
     return () => subscription.unsubscribe()
   }, [activeStaff])
 
-  // --- 2. TIER 1 & 2 ROUTING (MANAGEMENT GATEWAY) ---
+  // --- 2. DATA FETCHING (TIER 1) ---
+  const fetchPlatformOverview = async () => {
+    const { data: tenantsData } = await supabase.from('tenants').select('*').order('created_at', { ascending: false })
+    const { data: salesData } = await supabase.from('sales').select('*').order('created_at', { ascending: false })
+    setAllTenants(tenantsData || [])
+    setPlatformSales(salesData || [])
+  }
+
+  const approveTenant = async (tenantId) => {
+    const { error } = await supabase.from('tenants').update({ is_approved: true }).eq('id', tenantId)
+    if (!error) fetchPlatformOverview()
+    else alert("Error approving tenant: " + error.message)
+  }
+
+  // --- 3. TIER 1 & 2 ROUTING (MANAGEMENT GATEWAY) ---
   const handleTier1And2Auth = async (user) => {
     setLoading(true)
     
     // TIER 1: System Admin (IT)
     if (user.email === SYSTEM_ADMIN_EMAIL) {
+      await fetchPlatformOverview()
       setActiveStaff({ 
         role: { name: 'System Admin', tier_level: 1 }, 
         permissions: { can_void_line_item: true, can_export_client_list: true }
@@ -72,12 +90,11 @@ export default function App() {
     setLoading(false)
   }
 
-  // --- 3. TIER 3, 4, & 5 ROUTING (TERMINAL GATEWAY) ---
+  // --- 4. TIER 3, 4, & 5 ROUTING (TERMINAL GATEWAY) ---
   const handleTerminalLogin = async (e) => {
     e.preventDefault()
     setIsProcessing(true)
 
-    // 1. Validate Store Code
     const { data: tenantData, error: tenantError } = await supabase
       .from('tenants')
       .select('*')
@@ -90,13 +107,9 @@ export default function App() {
       return
     }
 
-    // 2. Validate Staff PIN & Fetch Tiers/Permissions
     const { data: staffData, error: staffError } = await supabase
       .from('staff')
-      .select(`
-        *,
-        roles (name, tier_level, default_permissions)
-      `)
+      .select(`*, roles (name, tier_level, default_permissions)`)
       .eq('tenant_id', tenantData.id)
       .eq('pin_code', staffPin)
       .eq('is_active', true)
@@ -108,17 +121,9 @@ export default function App() {
       return
     }
 
-    // Merge default role permissions with any custom staff overrides
-    const combinedPermissions = { 
-      ...staffData.roles.default_permissions, 
-      ...staffData.custom_permissions 
-    }
+    const combinedPermissions = { ...staffData.roles.default_permissions, ...staffData.custom_permissions }
 
-    // Log the secure terminal session (Audit Trail)
-    await supabase.from('terminal_sessions').insert([{
-      tenant_id: tenantData.id,
-      staff_id: staffData.id
-    }])
+    await supabase.from('terminal_sessions').insert([{ tenant_id: tenantData.id, staff_id: staffData.id }])
 
     setTenant(tenantData)
     setActiveStaff({
@@ -130,11 +135,10 @@ export default function App() {
     setIsProcessing(false)
   }
 
-  // --- 4. SECURE LOGOUT ---
+  // --- 5. SECURE LOGOUT ---
   const handleLogout = async () => {
     if (session) await supabase.auth.signOut()
     
-    // Close terminal session if staff is logged in
     if (activeStaff?.id && tenant?.id) {
       await supabase.from('terminal_sessions')
         .update({ logout_time: new Date().toISOString() })
@@ -158,8 +162,8 @@ export default function App() {
       <div className="flex h-screen bg-[#0f172a] font-sans text-slate-100 items-center justify-center p-6">
         <div className="w-full max-w-md bg-[#1e293b] border border-[#334155] rounded-xl shadow-2xl overflow-hidden">
           <div className="flex border-b border-[#334155]">
-            <button onClick={() => setLoginGateway('terminal')} className={`flex-1 py-4 font-bold text-xs tracking-widest uppercase ${loginGateway === 'terminal' ? 'bg-[#3b82f6] text-white' : 'text-slate-500 hover:text-slate-300'}`}>POS Terminal</button>
-            <button onClick={() => setLoginGateway('management')} className={`flex-1 py-4 font-bold text-xs tracking-widest uppercase ${loginGateway === 'management' ? 'bg-[#0f172a] text-white' : 'text-slate-500 hover:text-slate-300'}`}>HQ Office</button>
+            <button onClick={() => setLoginGateway('management')} className={`flex-1 py-4 font-bold text-xs tracking-widest uppercase ${loginGateway === 'management' ? 'bg-[#3b82f6] text-white' : 'text-slate-500 hover:text-slate-300'}`}>HQ Office</button>
+            <button onClick={() => setLoginGateway('terminal')} className={`flex-1 py-4 font-bold text-xs tracking-widest uppercase ${loginGateway === 'terminal' ? 'bg-[#0f172a] text-white' : 'text-slate-500 hover:text-slate-300'}`}>POS Terminal</button>
           </div>
           
           <div className="p-10">
@@ -214,8 +218,79 @@ export default function App() {
         
         {/* TIER 1: SYSTEM ADMIN */}
         {currentTier === 1 && (
-          <div className="p-10 w-full flex items-center justify-center text-slate-400 font-mono">
-            [System Admin Dashboard Component Loading...]
+          <div className="flex-1 overflow-y-auto bg-slate-950 text-slate-100 p-8">
+            <div className="max-w-7xl mx-auto">
+              <div className="mb-10 border-b border-slate-800 pb-6">
+                <p className="text-blue-400 font-bold text-xs tracking-widest uppercase mb-1">HarminSolutions Administrator</p>
+                <h1 className="text-3xl font-black tracking-tight">Global HQ Console</h1>
+              </div>
+
+              <div className="grid grid-cols-3 gap-6 mb-8">
+                <div className="bg-[#0f172a] border border-slate-800 p-6 rounded-2xl shadow-lg">
+                  <p className="text-xs text-slate-400 uppercase font-bold tracking-wider">Active Tenants</p>
+                  <p className="text-4xl font-black text-white mt-2">{allTenants.length}</p>
+                </div>
+                <div className="bg-[#0f172a] border border-slate-800 p-6 rounded-2xl shadow-lg">
+                  <p className="text-xs text-slate-400 uppercase font-bold tracking-wider">Total Platform Sales</p>
+                  <p className="text-4xl font-black text-white mt-2">{platformSales.length}</p>
+                </div>
+                <div className="bg-[#0f172a] border border-slate-800 p-6 rounded-2xl shadow-lg">
+                  <p className="text-xs text-slate-400 uppercase font-bold tracking-wider">Gross Processing Volume</p>
+                  <p className="text-4xl font-black text-emerald-400 mt-2">RM {platformSales.reduce((sum, s) => sum + s.total_amount, 0).toFixed(2)}</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-8">
+                <div className="bg-[#0f172a] border border-slate-800 rounded-2xl p-6 shadow-lg flex flex-col h-[500px]">
+                  <h2 className="text-xl font-bold mb-4 text-white">Registered Merchants</h2>
+                  <div className="flex-1 space-y-3 overflow-y-auto pr-2">
+                    {allTenants.length === 0 ? (
+                      <p className="text-sm text-slate-500">No merchants registered yet.</p>
+                    ) : (
+                      allTenants.map(t => (
+                        <div key={t.id} className="flex justify-between items-center bg-slate-900 p-4 rounded-xl border border-slate-800">
+                          <div>
+                            <p className="font-bold text-white text-lg">{t.business_name || 'Unnamed Store'}</p>
+                            <p className="text-xs text-slate-400 font-mono mt-1">Code: <span className="text-blue-400">{t.store_code || 'PENDING'}</span></p>
+                          </div>
+                          <div>
+                            {t.is_approved ? (
+                              <span className="text-xs px-3 py-1.5 rounded-lg font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Approved</span>
+                            ) : (
+                              <button onClick={() => approveTenant(t.id)} className="text-xs px-4 py-2 rounded-lg font-bold bg-orange-600 text-white hover:bg-orange-500 transition">Approve Merchant</button>
+                            )}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+
+                <div className="bg-[#0f172a] border border-slate-800 rounded-2xl p-6 shadow-lg flex flex-col h-[500px]">
+                  <h2 className="text-xl font-bold mb-4 text-white">Global Sales Audit Trail</h2>
+                  <div className="flex-1 space-y-3 overflow-y-auto pr-2">
+                    {platformSales.length === 0 ? (
+                      <p className="text-slate-500 text-sm">No transactions recorded across the platform yet.</p>
+                    ) : (
+                      platformSales.map(s => {
+                        const merchant = allTenants.find(t => t.id === s.tenant_id);
+                        return (
+                          <div key={s.id} className="flex justify-between items-center bg-slate-900 p-4 rounded-xl border border-slate-800 text-sm">
+                            <div>
+                              <p className="font-bold text-white text-base">RM {s.total_amount.toFixed(2)}</p>
+                              <p className="text-xs text-slate-400 mt-1">{(merchant && merchant.business_name) || 'Unknown Store'} · {new Date(s.created_at).toLocaleString()}</p>
+                            </div>
+                            <span className="text-[10px] uppercase font-bold tracking-wider text-slate-500 bg-slate-800 px-2 py-1 rounded">
+                              {s.lhdn_buyer_tin ? 'B2B e-Invoice' : 'B2C Sale'}
+                            </span>
+                          </div>
+                        )
+                      })
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
@@ -238,7 +313,6 @@ export default function App() {
                 {JSON.stringify(activeStaff.permissions, null, 2)}
               </pre>
             </div>
-            {currentTier === 4 && <p className="mt-6 text-xs text-red-500 font-bold bg-red-50 px-4 py-2 rounded">Notice: Your tier cannot authorize price overrides or line-item voids.</p>}
           </div>
         )}
 
